@@ -4,18 +4,17 @@ import android.app.Activity
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.view.inputmethod.InputMethodManager
+import android.content.Context
+import android.graphics.Color
+import android.graphics.Typeface
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
-import android.widget.EditText
-import android.graphics.Typeface
-import android.graphics.Color
-import android.view.inputmethod.InputMethodManager
-import android.content.Context
-import android.content.res.ColorStateList
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -36,15 +35,11 @@ private lateinit var sendButton: Button
 private lateinit var approveButton: Button
 private lateinit var rejectButton: Button
 
-private var currentProjectId: Long = -1L
-
-private val engines = arrayOf("Gemini", "Groq")
+private var currentProjectId = -1L
 
 override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-
     db = AppDatabase(this)
-
     buildInterface()
     restoreLatestProject()
 }
@@ -60,160 +55,115 @@ private fun buildInterface() {
     val scroll = ScrollView(this)
     scroll.addView(root)
 
-    val title = TextView(this).apply {
-        text = "Bassel AI"
-        textSize = 28f
-        setTypeface(null, Typeface.BOLD)
-        setTextColor(Color.rgb(25, 45, 80))
+    root.addView(label("Bassel AI", 28f, true).apply {
         gravity = Gravity.CENTER
-    }
-    root.addView(title, matchWidth())
+    }, params())
 
-    val subtitle = TextView(this).apply {
-        text = "مساعد ذكي لتحليل الطلبات وإعداد الخطط"
-        textSize = 16f
+    root.addView(label(
+        "تحليل الطلبات وإعداد الخطط بمساعدة الذكاء الاصطناعي",
+        16f
+    ).apply {
         gravity = Gravity.CENTER
-        setPadding(0, 8, 0, 20)
-    }
-    root.addView(subtitle, matchWidth())
+    }, params())
 
-    addLabel(root, "اختر محرك الذكاء الاصطناعي")
+    root.addView(label("محرك الذكاء الاصطناعي", 18f, true), params())
 
     engineSpinner = Spinner(this)
     engineSpinner.adapter = ArrayAdapter(
         this,
         android.R.layout.simple_spinner_dropdown_item,
-        engines
+        arrayOf("Gemini", "Groq")
     )
-    root.addView(engineSpinner, matchWidth())
+    root.addView(engineSpinner, params())
 
-    addLabel(root, "اكتب طلبك")
+    root.addView(label("اكتب طلبك", 18f, true), params())
 
     requestInput = EditText(this).apply {
-        hint = "اشرح ما تريد من Bassel AI"
+        hint = "اكتب الطلب الذي تريد تحليله"
         minLines = 4
         maxLines = 8
         gravity = Gravity.TOP or Gravity.RIGHT
         textSize = 16f
-        setPadding(12, 12, 12, 12)
-        setBackgroundColor(Color.WHITE)
     }
-    root.addView(
-        requestInput,
-        LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            setMargins(0, 0, 0, 16)
+    root.addView(requestInput, params())
+
+    sendButton = Button(this).apply {
+        text = "تحليل الطلب"
+        isAllCaps = false
+        setOnClickListener {
+            hideKeyboard()
+            submitRequest()
         }
-    )
-
-    sendButton = makeButton("تحليل الطلب")
-    root.addView(sendButton, matchWidth())
-
-    addLabel(root, "حالة المشروع")
-
-    statusText = TextView(this).apply {
-        text = "لا يوجد طلب بعد"
-        textSize = 16f
-        setPadding(0, 8, 0, 12)
     }
-    root.addView(statusText, matchWidth())
+    root.addView(sendButton, params())
 
-    addLabel(root, "الخطة والتحليل")
+    root.addView(label("حالة المشروع", 18f, true), params())
 
-    resultText = TextView(this).apply {
-        text = "ستظهر الخطة هنا بعد التحليل."
-        textSize = 16f
-        setTextColor(Color.DKGRAY)
-        setPadding(12, 12, 12, 12)
-        setBackgroundColor(Color.WHITE)
-        gravity = Gravity.RIGHT
+    statusText = label("جاهز", 16f)
+    root.addView(statusText, params())
+
+    root.addView(label("الخطة والتحليل", 18f, true), params())
+
+    resultText = label("ستظهر نتيجة التحليل هنا.", 16f)
+    resultText.setPadding(12, 12, 12, 12)
+    resultText.setBackgroundColor(Color.WHITE)
+    root.addView(resultText, params())
+
+    approveButton = Button(this).apply {
+        text = "الموافقة على الخطة"
+        isAllCaps = false
+        setOnClickListener { recordDecision(true) }
     }
-    root.addView(
-        resultText,
-        LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            setMargins(0, 0, 0, 16)
-        }
-    )
+    root.addView(approveButton, params())
 
-    approveButton = makeButton("موافقة على الخطة")
-    root.addView(approveButton, matchWidth())
-
-    rejectButton = makeButton("رفض الخطة")
-    root.addView(rejectButton, matchWidth())
-
-    sendButton.setOnClickListener {
-        hideKeyboard()
-        submitRequest()
+    rejectButton = Button(this).apply {
+        text = "رفض الخطة"
+        isAllCaps = false
+        setOnClickListener { recordDecision(false) }
     }
-
-    approveButton.setOnClickListener {
-        recordDecision(true)
-    }
-
-    rejectButton.setOnClickListener {
-        recordDecision(false)
-    }
+    root.addView(rejectButton, params())
 
     updateDecisionButtons(null)
-
     setContentView(scroll)
 }
 
-private fun matchWidth(): LinearLayout.LayoutParams {
-    return LinearLayout.LayoutParams(
-        LinearLayout.LayoutParams.MATCH_PARENT,
-        LinearLayout.LayoutParams.WRAP_CONTENT
-    ).apply {
-        setMargins(0, 0, 0, 12)
-    }
+private fun label(
+    value: String,
+    size: Float,
+    bold: Boolean = false
+) = TextView(this).apply {
+    text = value
+    textSize = size
+    gravity = Gravity.RIGHT
+    setTextColor(Color.rgb(35, 50, 75))
+    if (bold) setTypeface(null, Typeface.BOLD)
+    setPadding(0, 8, 0, 8)
 }
 
-private fun addLabel(parent: LinearLayout, value: String) {
-    val label = TextView(this).apply {
-        text = value
-        textSize = 17f
-        setTypeface(null, Typeface.BOLD)
-        setTextColor(Color.rgb(35, 50, 75))
-        setPadding(0, 12, 0, 8)
-    }
-    parent.addView(label, matchWidth())
-}
-
-private fun makeButton(value: String): Button {
-    return Button(this).apply {
-        text = value
-        isAllCaps = false
-        textSize = 16f
-    }
+private fun params() = LinearLayout.LayoutParams(
+    LinearLayout.LayoutParams.MATCH_PARENT,
+    LinearLayout.LayoutParams.WRAP_CONTENT
+).apply {
+    setMargins(0, 4, 0, 8)
 }
 
 private fun hideKeyboard() {
     val manager = getSystemService(
         Context.INPUT_METHOD_SERVICE
     ) as InputMethodManager
-
-    manager.hideSoftInputFromWindow(
-        requestInput.windowToken,
-        0
-    )
+    manager.hideSoftInputFromWindow(requestInput.windowToken, 0)
     requestInput.clearFocus()
 }
 
 private fun submitRequest() {
     val request = requestInput.text.toString().trim()
 
-    if (request.isEmpty()) {
-        statusText.text = "اكتب الطلب أولاً."
+    if (request.isBlank()) {
+        statusText.text = "اكتب طلبًا أولاً."
         return
     }
 
     val engine = engineSpinner.selectedItem.toString()
-
     val apiKey = when (engine) {
         "Gemini" -> BuildConfig.GEMINI_API_KEY
         "Groq" -> BuildConfig.GROQ_API_KEY
@@ -221,14 +171,13 @@ private fun submitRequest() {
     }
 
     if (apiKey.isBlank()) {
-        statusText.text =
-            "مفتاح $engine غير موجود داخل التطبيق. تحقق من إعدادات البناء."
+        statusText.text = "مفتاح $engine غير موجود في نسخة التطبيق."
         return
     }
 
     sendButton.isEnabled = false
     updateDecisionButtons(null)
-    statusText.text = "جارٍ إرسال الطلب إلى $engine..."
+    statusText.text = "جارٍ تحليل الطلب باستخدام $engine..."
     resultText.text = ""
 
     lifecycleScope.launch {
@@ -236,14 +185,13 @@ private fun submitRequest() {
             val projectId = withContext(Dispatchers.IO) {
                 db.createProject(request)
             }
-
             currentProjectId = projectId
 
             val plan = withContext(Dispatchers.IO) {
                 when (engine) {
                     "Gemini" -> requestGemini(request, apiKey)
                     "Groq" -> requestGroq(request, apiKey)
-                    else -> error("محرك غير معروف")
+                    else -> error("محرك غير معروف.")
                 }
             }
 
@@ -252,13 +200,11 @@ private fun submitRequest() {
             }
 
             resultText.text = plan
-            statusText.text =
-                "اكتمل التحليل عبر $engine. الخطة تنتظر موافقتك."
+            statusText.text = "اكتمل التحليل. الخطة تنتظر موافقتك."
             updateDecisionButtons("WAITING_FOR_APPROVAL")
 
         } catch (e: Exception) {
-            statusText.text =
-                "فشل التحليل: ${e.message ?: "خطأ غير معروف"}"
+            statusText.text = "فشل التحليل: ${e.message ?: "خطأ غير معروف"}"
         } finally {
             sendButton.isEnabled = true
         }
@@ -272,9 +218,9 @@ private fun requestGemini(
     val systemPrompt = """
         أنت مساعد Bassel AI.
         حلل طلب المستخدم باللغة العربية.
-        قدم خطة واضحة ومرقمة، وحدد الخطوات والنتيجة المتوقعة.
-        لا تدّع تنفيذ أي إجراء خارجي.
-        الخطة مقترح يحتاج إلى موافقة المستخدم قبل اعتماده.
+        قدم خطة واضحة ومرقمة وخطوات عملية.
+        لا تدّع تنفيذ إجراءات خارجية.
+        الخطة مقترح يحتاج إلى موافقة المستخدم.
     """.trimIndent()
 
     val body = JSONObject().apply {
@@ -282,12 +228,9 @@ private fun requestGemini(
             "systemInstruction",
             JSONObject().put(
                 "parts",
-                JSONArray().put(
-                    JSONObject().put("text", systemPrompt)
-                )
+                JSONArray().put(JSONObject().put("text", systemPrompt))
             )
         )
-
         put(
             "contents",
             JSONArray().put(
@@ -295,9 +238,7 @@ private fun requestGemini(
                     put("role", "user")
                     put(
                         "parts",
-                        JSONArray().put(
-                            JSONObject().put("text", request)
-                        )
+                        JSONArray().put(JSONObject().put("text", request))
                     )
                 }
             )
@@ -305,35 +246,27 @@ private fun requestGemini(
     }
 
     val response = postJson(
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
-        apiKey = apiKey,
-        headerName = "x-goog-api-key",
-        body = body,
-        bearer = false
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+        apiKey,
+        "x-goog-api-key",
+        body,
+        false
     )
 
     val candidates = response.optJSONArray("candidates")
-        ?: error("لم يُرجع Gemini أي نتائج.")
+        ?: error("لم يُرجع Gemini نتائج.")
 
     val parts = candidates.optJSONObject(0)
         ?.optJSONObject("content")
         ?.optJSONArray("parts")
         ?: error("استجابة Gemini لا تحتوي على نص.")
 
-    val output = StringBuilder()
+    val output = (0 until parts.length()).mapNotNull { index ->
+        parts.optJSONObject(index)?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+    }.joinToString("\n").trim()
 
-    for (i in 0 until parts.length()) {
-        val part = parts.optJSONObject(i)
-        val text = part?.optString("text").orEmpty()
-        if (text.isNotBlank()) {
-            if (output.isNotEmpty()) output.append("\n")
-            output.append(text)
-        }
-    }
-
-    return output.toString().trim().ifEmpty {
-        error("أعاد Gemini نتيجة فارغة.")
-    }
+    return output.ifBlank { error("أعاد Gemini نتيجة فارغة.") }
 }
 
 private fun requestGroq(
@@ -341,10 +274,9 @@ private fun requestGroq(
     apiKey: String
 ): String {
     val body = JSONObject().apply {
-        put("model", "llama-3.3-70b-versatile")
+        put("model", "openai/gpt-oss-120b")
         put("temperature", 0.2)
         put("max_completion_tokens", 2048)
-
         put(
             "messages",
             JSONArray()
@@ -356,9 +288,9 @@ private fun requestGroq(
                             """
                             أنت مساعد Bassel AI.
                             حلل الطلب باللغة العربية.
-                            قدم خطة واضحة ومرقمة، وحدد الخطوات والنتيجة المتوقعة.
-                            لا تدّع تنفيذ أي إجراء خارجي.
-                            الخطة مقترح يحتاج إلى موافقة المستخدم قبل اعتماده.
+                            قدم خطة واضحة ومرقمة وخطوات عملية.
+                            لا تدّع تنفيذ إجراءات خارجية.
+                            الخطة مقترح يحتاج إلى موافقة المستخدم.
                             """.trimIndent()
                         )
                     }
@@ -373,21 +305,21 @@ private fun requestGroq(
     }
 
     val response = postJson(
-        url = "https://api.groq.com/openai/v1/chat/completions",
-        apiKey = apiKey,
-        headerName = "Authorization",
-        body = body,
-        bearer = true
+        "https://api.groq.com/openai/v1/chat/completions",
+        apiKey,
+        "Authorization",
+        body,
+        true
     )
 
     val choices = response.optJSONArray("choices")
-        ?: error("لم يُرجع Groq أي نتائج.")
+        ?: error("لم يُرجع Groq نتائج.")
 
     return choices.optJSONObject(0)
         ?.optJSONObject("message")
         ?.optString("content")
         ?.trim()
-        ?.takeIf { it.isNotEmpty() }
+        ?.takeIf { it.isNotBlank() }
         ?: error("أعاد Groq نتيجة فارغة.")
 }
 
@@ -398,8 +330,7 @@ private fun postJson(
     body: JSONObject,
     bearer: Boolean
 ): JSONObject {
-    val connection = (URL(url).openConnection()
-        as HttpURLConnection)
+    val connection = URL(url).openConnection() as HttpURLConnection
 
     try {
         connection.requestMethod = "POST"
@@ -410,35 +341,26 @@ private fun postJson(
             "Content-Type",
             "application/json; charset=UTF-8"
         )
-
-        val headerValue = if (bearer) {
-            "Bearer $apiKey"
-        } else {
-            apiKey
-        }
-
         connection.setRequestProperty(
             headerName,
-            headerValue
+            if (bearer) "Bearer $apiKey" else apiKey
         )
 
         connection.outputStream.use { stream ->
             stream.write(body.toString().toByteArray(Charsets.UTF_8))
         }
 
-        val statusCode = connection.responseCode
-
-        val responseStream = if (statusCode in 200..299) {
+        val code = connection.responseCode
+        val stream = if (code in 200..299) {
             connection.inputStream
         } else {
             connection.errorStream
         }
 
-        val responseText = responseStream?.bufferedReader(
-            Charsets.UTF_8
-        )?.use { it.readText() }.orEmpty()
+        val responseText = stream?.bufferedReader(Charsets.UTF_8)
+            ?.use { it.readText() }.orEmpty()
 
-        if (statusCode !in 200..299) {
+        if (code !in 200..299) {
             val message = try {
                 JSONObject(responseText)
                     .optJSONObject("error")
@@ -446,16 +368,10 @@ private fun postJson(
             } catch (_: Exception) {
                 null
             }
-
-            error(
-                "HTTP $statusCode: " +
-                    (message?.takeIf { it.isNotBlank() }
-                        ?: responseText.take(500))
-            )
+            error("HTTP $code: ${message?.takeIf { it.isNotBlank() } ?: responseText.take(400)}")
         }
 
         return JSONObject(responseText)
-
     } finally {
         connection.disconnect()
     }
@@ -485,10 +401,8 @@ private fun recordDecision(approved: Boolean) {
             updateDecisionButtons(
                 if (approved) "APPROVED" else "REJECTED"
             )
-
         } catch (e: Exception) {
-            statusText.text =
-                "تعذر تسجيل القرار: ${e.message ?: "خطأ غير معروف"}"
+            statusText.text = "تعذر تسجيل القرار: ${e.message}"
             updateDecisionButtons("WAITING_FOR_APPROVAL")
         }
     }
@@ -503,23 +417,19 @@ private fun restoreLatestProject() {
 
             currentProjectId = project.id
             requestInput.setText(project.request)
-            resultText.text = project.plan
-                ?: "لا توجد خطة محفوظة لهذا الطلب."
+            resultText.text = project.plan ?: "لا توجد خطة محفوظة."
 
             statusText.text = when (project.status) {
-                "ANALYSIS" -> "الطلب محفوظ، لكن التحليل لم يكتمل."
-                "WAITING_FOR_APPROVAL" ->
-                    "الخطة تنتظر موافقتك."
+                "ANALYSIS" -> "الطلب محفوظ ولم يكتمل تحليله."
+                "WAITING_FOR_APPROVAL" -> "الخطة تنتظر موافقتك."
                 "APPROVED" -> "تمت الموافقة على الخطة."
                 "REJECTED" -> "تم رفض الخطة."
                 else -> "حالة المشروع: ${project.status}"
             }
 
             updateDecisionButtons(project.status)
-
         } catch (e: Exception) {
-            statusText.text =
-                "تعذر استرجاع المشروع: ${e.message ?: "خطأ غير معروف"}"
+            statusText.text = "تعذر استرجاع المشروع: ${e.message}"
         }
     }
 }
@@ -531,9 +441,7 @@ private fun updateDecisionButtons(status: String?) {
 }
 
 override fun onDestroy() {
-    if (::db.isInitialized) {
-        db.close()
-    }
+    if (::db.isInitialized) db.close()
     super.onDestroy()
 }
 
