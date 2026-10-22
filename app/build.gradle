@@ -1,1 +1,57 @@
 
+
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+def geminiKey = System.getenv("GEMINI_API_KEY") ?: ""
+def groqKey = System.getenv("GROQ_API_KEY") ?: ""
+
+def javaString = { value ->
+    value.toString()
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+}
+
+android {
+    namespace 'com.attentiontop.basselai'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.attentiontop.basselai'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    defaultConfig {
+        buildConfigField "String", "GEMINI_API_KEY",
+            "\"${javaString(geminiKey)}\""
+        buildConfigField "String", "GROQ_API_KEY",
+            "\"${javaString(groqKey)}\""
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.15.0'
+    implementation 'androidx.activity:activity-ktx:1.10.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+}
