@@ -27,6 +27,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
@@ -41,10 +42,15 @@ class MainActivity : Activity() {
     private lateinit var btnReject: Button
     private lateinit var txtResult: TextView
     private lateinit var txtStatus: TextView
+    private lateinit var btnModeSelector: Button
 
     private var currentProjectId: Long = -1L
     private var isNetworkCallInProgress: Boolean = false
     private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    // خيارات التحكم اليدوي أو التلقائي
+    private var selectedTargetAgent: String = "AUTO" // AUTO, PLANNER, EXECUTOR
+    private var selectedTargetProvider: String = "AUTO" // AUTO, GEMINI, GROQ
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,7 +91,7 @@ class MainActivity : Activity() {
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), dp(14), dp(14), dp(14))
-            setBackgroundColor(Color.parseColor("#121212"))
+            setBackgroundColor(Color.parseColor("#0F121C"))
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -94,30 +100,31 @@ class MainActivity : Activity() {
         }
 
         val headerTitle = TextView(this).apply {
-            text = "Bassel AI - مجلس الإدارة والوكلاء"
-            textSize = 19f
+            text = "Bassel AI - مجلس الإدارة والوكلاء الذكي"
+            textSize = 18f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
+            setTextColor(Color.parseColor("#EEF2FA"))
             gravity = Gravity.CENTER
-            setPadding(0, dp(4), 0, dp(10))
+            setPadding(0, dp(4), 0, dp(8))
         }
 
+        // شريط الأزرار العلوية
         val topBarLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(10) }
+            ).apply { bottomMargin = dp(8) }
         }
 
-        val btnArchive = createSmallButton("📂 الأرشيف", "#2C2C2C").apply {
+        val btnArchive = createSmallButton("📂 الأرشيف", "#1B202E").apply {
             setOnClickListener { showProjectsArchiveDialog() }
         }
-        val btnLogs = createSmallButton("📊 سجل المحاولات", "#2C2C2C").apply {
+        val btnLogs = createSmallButton("📊 السجل", "#1B202E").apply {
             setOnClickListener { showAttemptsLogDialog() }
         }
-        val btnSettings = createSmallButton("⚙️ إعدادات المفاتيح", "#37474F").apply {
+        val btnSettings = createSmallButton("⚙️ المفاتيح", "#273248").apply {
             setOnClickListener { showApiKeysDialog() }
         }
 
@@ -125,27 +132,41 @@ class MainActivity : Activity() {
         topBarLayout.addView(btnLogs)
         topBarLayout.addView(btnSettings)
 
+        // زر اختيار نمط التشغيل (تلقائي أو مخصص)
+        btnModeSelector = Button(this).apply {
+            text = "🎯 النمط: المجلس التلقائي (الكل)"
+            textSize = 12f
+            setBackgroundColor(Color.parseColor("#273248"))
+            setTextColor(Color.parseColor("#5B8DEF"))
+            setTypeface(null, Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(6) }
+            setOnClickListener { showModeSelectionDialog() }
+        }
+
         txtStatus = TextView(this).apply {
             text = "الحالة: جاهز لاستقبال الأوامر"
             textSize = 13f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#03DAC5"))
-            setPadding(dp(4), 0, dp(4), dp(8))
+            setTextColor(Color.parseColor("#5B8DEF"))
+            setPadding(dp(4), 0, dp(4), dp(6))
         }
 
         inputRequest = EditText(this).apply {
-            hint = "اكتب فكرتك أو مشروعك البرمجي هنا..."
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.parseColor("#888888"))
-            setBackgroundColor(Color.parseColor("#1E1E1E"))
+            hint = "اكتب فكرتك أو طلبك البرمجي هنا..."
+            setTextColor(Color.parseColor("#EEF2FA"))
+            setHintTextColor(Color.parseColor("#A0ABBE"))
+            setBackgroundColor(Color.parseColor("#1B202E"))
             minLines = 2
             maxLines = 4
             setPadding(dp(12), dp(10), dp(12), dp(10))
         }
 
         btnAnalyze = Button(this).apply {
-            text = "🚀 المرحلة 1: التخطيط الهندسي (PLANNER)"
-            setBackgroundColor(Color.parseColor("#6200EE"))
+            text = "🚀 بدء التخطيط الهندسي (PLANNER)"
+            setBackgroundColor(Color.parseColor("#5B8DEF"))
             setTextColor(Color.WHITE)
             setTypeface(null, Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(
@@ -204,13 +225,13 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
                 1f
-            ).apply { topMargin = dp(10) }
-            setBackgroundColor(Color.parseColor("#181818"))
+            ).apply { topMargin = dp(8) }
+            setBackgroundColor(Color.parseColor("#121622"))
         }
 
         txtResult = TextView(this).apply {
-            text = "أهلاً بك في نظام Bassel AI متعدد الوكلاء.\n\n1. اضغط على (⚙️ إعدادات المفاتيح) لتأكيد مفاتيح Gemini و Groq.\n2. اكتب فكرتك في الأعلى واضغط تخطيط."
-            setTextColor(Color.parseColor("#E0E0E0"))
+            text = "أهلاً بك في نظام Bassel AI.\n\n1. اضغط على (⚙️ المفاتيح) لتأكيد مفاتيح Gemini و Groq.\n2. يمكنك تخصيص الوكيل والمحرك من زر (🎯 النمط).\n3. اكتب فكرتك وابدأ العمل."
+            setTextColor(Color.parseColor("#EEF2FA"))
             textSize = 14f
             setPadding(dp(12), dp(12), dp(12), dp(12))
             setTextIsSelectable(true)
@@ -225,13 +246,13 @@ class MainActivity : Activity() {
             ).apply { topMargin = dp(8) }
         }
 
-        val btnCopy = createSmallButton("📋 نسخ", "#263238").apply {
+        val btnCopy = createSmallButton("📋 نسخ", "#1B202E").apply {
             setOnClickListener { copyResultToClipboard() }
         }
-        val btnShare = createSmallButton("📤 مشاركة", "#263238").apply {
+        val btnShare = createSmallButton("📤 مشاركة", "#1B202E").apply {
             setOnClickListener { shareResultText() }
         }
-        val btnNew = createSmallButton("➕ مشروع جديد", "#4A148C").apply {
+        val btnNew = createSmallButton("➕ مشروع جديد", "#311B92").apply {
             setOnClickListener { resetForNewProject() }
         }
 
@@ -241,6 +262,7 @@ class MainActivity : Activity() {
 
         rootLayout.addView(headerTitle)
         rootLayout.addView(topBarLayout)
+        rootLayout.addView(btnModeSelector)
         rootLayout.addView(txtStatus)
         rootLayout.addView(inputRequest)
         rootLayout.addView(btnAnalyze)
@@ -256,12 +278,56 @@ class MainActivity : Activity() {
             text = label
             textSize = 12f
             setBackgroundColor(Color.parseColor(hexColor))
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+            setTextColor(Color.parseColor("#EEF2FA"))
+            layoutParams = LinearLayout.LayoutParams(0, dp(38), 1f).apply {
                 marginStart = dp(3)
                 marginEnd = dp(3)
             }
         }
+    }
+
+    private fun showModeSelectionDialog() {
+        val options = arrayOf(
+            "🔄 المجلس التلقائي المتكامل (Auto-Pilot)",
+            "🧠 وكيل التخطيط فقط (Planner)",
+            "⚙️ وكيل التنفيذ فقط (Executor)",
+            "🤖 المحرك المباشر: Groq (gpt-oss-120b)",
+            "🌐 المحرك المباشر: Gemini (1.5-Flash)"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("🎯 حدد نمط التشغيل والتحكم")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> {
+                        selectedTargetAgent = "AUTO"
+                        selectedTargetProvider = "AUTO"
+                        btnModeSelector.text = "🎯 النمط: المجلس التلقائي (الكل)"
+                    }
+                    1 -> {
+                        selectedTargetAgent = "PLANNER"
+                        selectedTargetProvider = "AUTO"
+                        btnModeSelector.text = "🎯 النمط المخصص: وكيل التخطيط (Planner)"
+                    }
+                    2 -> {
+                        selectedTargetAgent = "EXECUTOR"
+                        selectedTargetProvider = "AUTO"
+                        btnModeSelector.text = "🎯 النمط المخصص: وكيل التنفيذ (Executor)"
+                    }
+                    3 -> {
+                        selectedTargetAgent = "AUTO"
+                        selectedTargetProvider = "GROQ"
+                        btnModeSelector.text = "🎯 المحرك المباشر: Groq حصرياً"
+                    }
+                    4 -> {
+                        selectedTargetAgent = "AUTO"
+                        selectedTargetProvider = "GEMINI"
+                        btnModeSelector.text = "🎯 المحرك المباشر: Gemini حصرياً"
+                    }
+                }
+                Toast.makeText(this, "تم تغيير النمط بنجاح", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("إلغاء", null)
+            .show()
     }
 
     private fun displayProjectState(project: ProjectModel) {
@@ -305,7 +371,7 @@ class MainActivity : Activity() {
     private fun startPlanningWorkflow(prompt: String) {
         if (getActiveGeminiKey().isEmpty() && getActiveGroqKey().isEmpty()) {
             txtStatus.text = "الحالة: ⚠️ المفاتيح غير موجودة"
-            txtResult.text = "الرجاء النقر على (⚙️ إعدادات المفاتيح) في الأعلى وإدخال مفتاح Gemini أو Groq."
+            txtResult.text = "الرجاء النقر على (⚙️ المفاتيح) في الأعلى وإدخال مفتاح واحد على الأقل."
             showApiKeysDialog()
             return
         }
@@ -314,21 +380,32 @@ class MainActivity : Activity() {
         approvalLayout.visibility = View.GONE
         currentProjectId = dbHelper.createProject(prompt)
 
-        txtStatus.text = "الحالة: 🧠 وكيل التخطيط يحلل الطلب..."
-        txtResult.text = "الطلب: $prompt\n\n[جاري إرسال الطلب للمحركات الذكية...]"
+        txtStatus.text = "الحالة: 🧠 جاري معالجة الطلب..."
+        txtResult.text = "الطلب: $prompt\n\n[جاري إرسال الطلب حسب النمط المختار...]"
 
-        val systemInstruction = "أنت كبير مهندسي البرمجيات في Bassel AI. ضع خطة عمل هندسية واضحة للطلب التالي: $prompt"
+        val role = if (selectedTargetAgent == "EXECUTOR") "executor" else "planner"
+        val systemInstruction = if (role == "planner") {
+            "أنت كبير مهندسي البرمجيات في Bassel AI. ضع خطة عمل هندسية واضحة للطلب التالي: $prompt"
+        } else {
+            "أنت المهندس المنفذ في Bassel AI. اكتب الأكواد البرمجية الكاملة للطلب: $prompt"
+        }
 
-        executeAiTaskWithFallback(role = "planner", promptText = systemInstruction) { success, output, provider, errorMsg ->
+        executeAiTaskSmart(role = role, promptText = systemInstruction) { success, output, provider, errorMsg ->
             if (success && output != null) {
-                dbHelper.savePlanAndWaitApproval(currentProjectId, output)
-                txtStatus.text = "الحالة: ⏳ الخطة جاهزة (عبر $provider)"
-                txtResult.text = "📋 --- خطة العمل (عبر $provider) ---\n\n$output\n\n-------------------\nاضغط على اعتماد لتنفيذ الكود."
-                approvalLayout.visibility = View.VISIBLE
+                if (role == "planner") {
+                    dbHelper.savePlanAndWaitApproval(currentProjectId, output)
+                    txtStatus.text = "الحالة: ⏳ الخطة جاهزة (عبر $provider)"
+                    txtResult.text = "📋 --- خطة العمل (عبر $provider) ---\n\n$output\n\n-------------------\nاضغط على اعتماد لتنفيذ الكود."
+                    approvalLayout.visibility = View.VISIBLE
+                } else {
+                    dbHelper.saveExecutionAndComplete(currentProjectId, output)
+                    txtStatus.text = "الحالة: ✅ اكتمل التنفيذ مباشرة (عبر $provider)"
+                    txtResult.text = "🚀 --- المخرج النهائي (عبر $provider) ---\n\n$output"
+                }
             } else {
                 dbHelper.updateProjectStatus(currentProjectId, AppDatabase.STATUS_FAILED)
-                txtStatus.text = "الحالة: ❌ فشل في التخطيط"
-                txtResult.text = "تعذر إتمام التحليل.\nالسبب: $errorMsg\n\nتأكد من صحة مفاتيح الـ API في الإعدادات."
+                txtStatus.text = "الحالة: ❌ فشل في التنفيذ"
+                txtResult.text = "تعذر إتمام العملية.\nالسبب: $errorMsg"
             }
         }
     }
@@ -346,7 +423,7 @@ class MainActivity : Activity() {
 
         val executionPrompt = "أنت المهندس المنفذ في Bassel AI. اكتب الأكواد البرمجية الكاملة للطلب: ${project.request} بناءً على الخطة: ${project.plan}"
 
-        executeAiTaskWithFallback(role = "executor", promptText = executionPrompt) { success, output, provider, errorMsg ->
+        executeAiTaskSmart(role = "executor", promptText = executionPrompt) { success, output, provider, errorMsg ->
             if (success && output != null) {
                 dbHelper.saveExecutionAndComplete(currentProjectId, output)
                 txtStatus.text = "الحالة: ✅ اكتمل التنفيذ (عبر $provider)"
@@ -367,7 +444,8 @@ class MainActivity : Activity() {
         Toast.makeText(this, "تم رفض الخطة", Toast.LENGTH_SHORT).show()
     }
 
-    private fun executeAiTaskWithFallback(
+    // --- آلية التوجيه الذكي (حسب اختيار المستخدم أو التلقائي مع الـ Fallback) ---
+    private fun executeAiTaskSmart(
         role: String,
         promptText: String,
         onComplete: (Boolean, String?, String, String) -> Unit
@@ -381,23 +459,39 @@ class MainActivity : Activity() {
             var usedProvider = ""
             var errorLog = ""
 
-            // 1. محاولة Gemini أولاً
-            if (output == null && geminiKey.isNotEmpty()) {
+            // إذا حدد المستخدم مزوداً معيناً حصرياً
+            if (selectedTargetProvider == "GROQ" && groqKey.isNotEmpty()) {
                 try {
-                    usedProvider = "Gemini"
+                    usedProvider = "Groq (محدد)"
+                    output = callGroqApi(promptText, groqKey)
+                } catch (e: Exception) {
+                    errorLog += "Groq: ${e.message}; "
+                }
+            } else if (selectedTargetProvider == "GEMINI" && geminiKey.isNotEmpty()) {
+                try {
+                    usedProvider = "Gemini (محدد)"
                     output = callGeminiApi(promptText, geminiKey)
                 } catch (e: Exception) {
                     errorLog += "Gemini: ${e.message}; "
                 }
-            }
+            } else {
+                // النظام التلقائي (Fallback chain: Groq أولاً بنموذج openai/gpt-oss-120b ثم Gemini)
+                if (output == null && groqKey.isNotEmpty()) {
+                    try {
+                        usedProvider = "Groq"
+                        output = callGroqApi(promptText, groqKey)
+                    } catch (e: Exception) {
+                        errorLog += "Groq: ${e.message}; "
+                    }
+                }
 
-            // 2. محاولة Groq بالنموذج المحدث المستقر
-            if (output == null && groqKey.isNotEmpty()) {
-                try {
-                    usedProvider = "Groq"
-                    output = callGroqApi(promptText, groqKey)
-                } catch (e: Exception) {
-                    errorLog += "Groq: ${e.message}; "
+                if (output == null && geminiKey.isNotEmpty()) {
+                    try {
+                        usedProvider = "Gemini"
+                        output = callGeminiApi(promptText, geminiKey)
+                    } catch (e: Exception) {
+                        errorLog += "Gemini: ${e.message}; "
+                    }
                 }
             }
 
@@ -413,52 +507,84 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun callGeminiApi(prompt: String, apiKey: String): String {
-        val urlString = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
+    private fun callGroqApi(prompt: String, apiKey: String): String {
+        // الاعتماد على النموذج الصحيح openai/gpt-oss-120b والمجرب لديك تماماً
+        val urlString = "https://api.groq.com/openai/v1/chat/completions"
+        val body = JSONObject().apply {
+            put("model", "openai/gpt-oss-120b")
+            put("messages", JSONArray().apply {
+                put(JSONObject().put("role", "user").put("content", prompt))
+            })
+            put("temperature", 0.2)
+        }
+
         val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
-            setRequestProperty("Content-Type", "application/json")
-            connectTimeout = 20000; readTimeout = 60000; doOutput = true
+            connectTimeout = 20_000
+            readTimeout = 60_000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+            setRequestProperty("Authorization", "Bearer $apiKey")
         }
-        val jsonBody = JSONObject().apply {
+
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: throw IOException("استجابة فارغة")
+
+            if (status !in 200..299) {
+                throw IOException("HTTP $status: $response")
+            }
+
+            val json = JSONObject(response)
+            return json.optJSONArray("choices")?.optJSONObject(0)
+                ?.optJSONObject("message")?.optString("content")?.trim()
+                ?: throw EmptyStackException()
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun callGeminiApi(prompt: String, apiKey: String): String {
+        val urlString = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=$apiKey"
+        val body = JSONObject().apply {
             put("contents", JSONArray().apply {
                 put(JSONObject().apply {
                     put("parts", JSONArray().apply { put(JSONObject().put("text", prompt)) })
                 })
             })
         }
-        connection.outputStream.use { it.write(jsonBody.toString().toByteArray(Charsets.UTF_8)) }
-        if (connection.responseCode != 200) throw RuntimeException("HTTP ${connection.responseCode}")
-        val res = connection.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
-        return JSONObject(res).optJSONArray("candidates")?.optJSONObject(0)
-            ?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)
-            ?.optString("text", "") ?: throw RuntimeException("Empty Gemini Response")
-    }
 
-    private fun callGroqApi(prompt: String, apiKey: String): String {
-        // استخدام نموذج llama-3.3-70b-versatile الأحدث والمستقر تماماً في Groq
-        val urlString = "https://api.groq.com/openai/v1/chat/completions"
         val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Authorization", "Bearer $apiKey")
-            connectTimeout = 15000; readTimeout = 45000; doOutput = true
+            connectTimeout = 20_000
+            readTimeout = 60_000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
         }
-        val jsonBody = JSONObject().apply {
-            put("model", "llama-3.3-70b-versatile")
-            put("messages", JSONArray().apply { put(JSONObject().put("role", "user").put("content", prompt)) })
+
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: throw IOException("استجابة فارغة")
+
+            if (status !in 200..299) {
+                throw IOException("HTTP $status: $response")
+            }
+
+            val json = JSONObject(response)
+            return json.optJSONArray("candidates")?.optJSONObject(0)
+                ?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)
+                ?.optString("text", "") ?: throw IOException("استجابة فارغة من Gemini")
+        } finally {
+            connection.disconnect()
         }
-        connection.outputStream.use { it.write(jsonBody.toString().toByteArray(Charsets.UTF_8)) }
-        if (connection.responseCode != 200) throw RuntimeException("HTTP ${connection.responseCode}")
-        val res = connection.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
-        return JSONObject(res).optJSONArray("choices")?.optJSONObject(0)
-            ?.optJSONObject("message")?.optString("content", "") ?: throw RuntimeException("Empty Groq Response")
     }
 
     private fun showApiKeysDialog() {
         val prefs = getPrefs()
-        
-        // استخدام ScrollView داخل النافذة لكي لا تظهر الخانات مقصورة أبداً
         val scrollView = ScrollView(this)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -479,7 +605,7 @@ class MainActivity : Activity() {
         }
 
         val infoText = TextView(this).apply {
-            text = "أدخل مفاتيح Gemini و Groq الصحيحة هنا لحل مشكلة الاتصال تماماً:"
+            text = "أدخل مفتاح Gemini و Groq الصحيح أدناه:"
             textSize = 12f
             setTextColor(Color.LTGRAY)
             setPadding(0, 0, 0, dp(10))
@@ -491,7 +617,7 @@ class MainActivity : Activity() {
         scrollView.addView(layout)
 
         AlertDialog.Builder(this)
-            .setTitle("⚙️ إعدادات مفاتيح الـ API")
+            .setTitle("⚙️ إعدادات المفاتيح")
             .setView(scrollView)
             .setPositiveButton("حفظ وتفعيل") { _, _ ->
                 prefs.edit()
