@@ -1,558 +1,232 @@
-
 package com.attentiontop.basselai
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.graphics.Color
-import android.graphics.Typeface
 import android.os.Bundle
-import android.view.Gravity
 import android.view.View
-import android.view.inputmethod.InputMethodManager
-import android.widget.*
-import androidx.activity.ComponentActivity
+import android.widget.Button
+import android.widget.EditText
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
-    private lateinit var db: AppDatabase
-    private lateinit var requestInput: EditText
-    private lateinit var engineSpinner: Spinner
-    private lateinit var statusText: TextView
-    private lateinit var resultText: TextView
-    private lateinit var sendButton: Button
-    private lateinit var approveButton: Button
-    private lateinit var rejectButton: Button
-    private lateinit var copyButton: Button
+    private lateinit.database: AppDatabase // Will use dbHelper
+    private lateinit var dbHelper: AppDatabase
+    private lateinit var inputRequest: EditText
+    private lateinit var btnAnalyze: Button
+    private lateinit var btnApprove: Button
+    private lateinit var btnReject: Button
+    private lateinit var txtResult: TextView
+    private lateinit var txtStatus: TextView
 
-    private var currentProjectId = -1L
-    private var busy = false
-    private var currentStatus: String? = null
-
-    private val pageColor = Color.rgb(17, 24, 39)
-    private val cardColor = Color.rgb(31, 41, 55)
-    private val textColor = Color.rgb(243, 244, 246)
-    private val hintColor = Color.rgb(156, 163, 175)
-    private val accentColor = Color.rgb(96, 165, 250)
+    private var currentProjectId: Long = -1L
+    private var isNetworkCallInProgress: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        db = AppDatabase(this)
-        buildInterface()
+        setContentView(R.layout.activity_main)
+
+        dbHelper = AppDatabase(this)
+
+        inputRequest = findViewById(R.id.inputRequest)
+        btnAnalyze = findViewById(R.id.btnAnalyze)
+        // افترض أن هذه الأزرار موجودة في التخطيط أو سيتم التعامل معها برمجياً
+        txtResult = findViewById(R.id.txtResult)
+        txtStatus = findViewById(R.id.txtStatus)
+
+        // استعادة آخر مشروع نشط عند فتح التطبيق لمنع ضياع السياق
         restoreLatestProject()
-    }
 
-    private fun buildInterface() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(20, 20, 20, 24)
-            layoutDirection = View.LAYOUT_DIRECTION_RTL
-            setBackgroundColor(pageColor)
-        }
-
-        val scroll = ScrollView(this)
-        scroll.addView(root)
-
-        root.addView(
-            label("Bassel AI", 30f, true).apply {
-                gravity = Gravity.CENTER
-                setTextColor(accentColor)
-            },
-            params()
-        )
-
-        root.addView(
-            label("مساعدك لتحليل الطلبات وإعداد الخطط", 15f).apply {
-                gravity = Gravity.CENTER
-                setTextColor(hintColor)
-            },
-            params()
-        )
-
-        root.addView(label("محرك الذكاء الاصطناعي", 17f, true), params())
-
-        engineSpinner = Spinner(this)
-        engineSpinner.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            arrayOf("Gemini", "Groq")
-        )
-        root.addView(engineSpinner, params())
-
-        root.addView(label("اكتب طلبك", 17f, true), params())
-
-        requestInput = EditText(this).apply {
-            hint = "اكتب طلبك هنا..."
-            setHintTextColor(hintColor)
-            setTextColor(textColor)
-            textSize = 16f
-            minLines = 4
-            maxLines = 8
-            gravity = Gravity.TOP or Gravity.RIGHT
-            setPadding(14, 14, 14, 14)
-            setBackgroundColor(cardColor)
-        }
-        root.addView(requestInput, params())
-
-        sendButton = makeButton("تحليل الطلب") {
-            hideKeyboard()
-            submitRequest()
-        }
-        root.addView(sendButton, params())
-
-        root.addView(label("الحالة", 17f, true), params())
-
-        statusText = label("جاهز", 15f).apply {
-            setTextColor(accentColor)
-        }
-        root.addView(statusText, params())
-
-        root.addView(label("النتيجة", 17f, true), params())
-
-        resultText = label("ستظهر الإجابة هنا.", 16f).apply {
-            setPadding(14, 14, 14, 14)
-            setBackgroundColor(cardColor)
-            setTextIsSelectable(true)
-            gravity = Gravity.TOP or Gravity.RIGHT
-        }
-        root.addView(resultText, params())
-
-        copyButton = makeButton("نسخ الإجابة") { copyAnswer() }
-        root.addView(copyButton, params())
-
-        root.addView(label("قرارك بشأن الخطة", 17f, true), params())
-
-        approveButton = makeButton("الموافقة على الخطة") {
-            recordDecision(true)
-        }
-        root.addView(approveButton, params())
-
-        rejectButton = makeButton("رفض الخطة") {
-            recordDecision(false)
-        }
-        root.addView(rejectButton, params())
-
-        setContentView(scroll)
-        updateControls()
-    }
-
-    private fun label(
-        value: String,
-        size: Float,
-        bold: Boolean = false
-    ) = TextView(this).apply {
-        text = value
-        textSize = size
-        gravity = Gravity.RIGHT
-        setTextColor(textColor)
-        if (bold) setTypeface(null, Typeface.BOLD)
-        setPadding(0, 8, 0, 8)
-    }
-
-    private fun params() = LinearLayout.LayoutParams(
-        LinearLayout.LayoutParams.MATCH_PARENT,
-        LinearLayout.LayoutParams.WRAP_CONTENT
-    ).apply {
-        setMargins(0, 4, 0, 10)
-    }
-
-    private fun makeButton(
-        title: String,
-        action: () -> Unit
-    ) = Button(this).apply {
-        text = title
-        isAllCaps = false
-        setOnClickListener { action() }
-    }
-
-    private fun hideKeyboard() {
-        val manager = getSystemService(
-            Context.INPUT_METHOD_SERVICE
-        ) as InputMethodManager
-        manager.hideSoftInputFromWindow(requestInput.windowToken, 0)
-        requestInput.clearFocus()
-    }
-
-    private fun updateControls() {
-        sendButton.isEnabled = !busy
-        val waiting = !busy &&
-            currentStatus == AppDatabase.WAITING_FOR_APPROVAL
-        approveButton.isEnabled = waiting
-        rejectButton.isEnabled = waiting
-        copyButton.isEnabled = resultText.text.toString()
-            .isNotBlank() && resultText.text.toString() != "ستظهر الإجابة هنا."
-    }
-
-    private fun submitRequest() {
-        if (busy) return
-
-        val request = requestInput.text.toString().trim()
-        if (request.isBlank()) {
-            statusText.text = "اكتب طلبًا أولاً."
-            return
-        }
-
-        val directAnswer = simpleReply(request)
-        if (directAnswer != null) {
-            busy = true
-            currentStatus = AppDatabase.ANALYSIS
-            updateControls()
-            statusText.text = "جارٍ حفظ الإجابة..."
-
-            lifecycleScope.launch {
-                try {
-                    val id = withContext(Dispatchers.IO) {
-                        val project = db.createProject(request)
-                        db.saveDirectAnswer(project, directAnswer)
-                        project
-                    }
-                    currentProjectId = id
-                    currentStatus = AppDatabase.COMPLETED
-                    resultText.text = directAnswer
-                    statusText.text = "إجابة مباشرة"
-                } catch (e: Exception) {
-                    statusText.text = "تعذر حفظ الإجابة: ${e.message}"
-                    resultText.text = directAnswer
-                } finally {
-                    busy = false
-                    updateControls()
-                }
-            }
-            return
-        }
-
-        val engine = engineSpinner.selectedItem.toString()
-        val apiKey = when (engine) {
-            "Gemini" -> BuildConfig.GEMINI_API_KEY
-            "Groq" -> BuildConfig.GROQ_API_KEY
-            else -> ""
-        }
-
-        if (apiKey.isBlank()) {
-            statusText.text = "مفتاح $engine غير موجود."
-            return
-        }
-
-        busy = true
-        currentStatus = AppDatabase.ANALYSIS
-        resultText.text = ""
-        statusText.text = "جارٍ تحليل الطلب باستخدام $engine..."
-        updateControls()
-
-        lifecycleScope.launch {
-            var projectId = -1L
-            try {
-                projectId = withContext(Dispatchers.IO) {
-                    db.createProject(request)
-                }
-                currentProjectId = projectId
-
-                val started = System.currentTimeMillis()
-                val plan = withContext(Dispatchers.IO) {
-                    when (engine) {
-                        "Gemini" -> requestGemini(request, apiKey)
-                        "Groq" -> requestGroq(request, apiKey)
-                        else -> error("محرك غير معروف.")
-                    }
-                }
-                val duration = System.currentTimeMillis() - started
-
-                withContext(Dispatchers.IO) {
-                    db.recordAttempt(
-                        projectId, engine, "planning",
-                        output = plan, durationMs = duration
-                    )
-                    db.savePlanAndWaitApproval(projectId, plan)
-                }
-
-                currentStatus = AppDatabase.WAITING_FOR_APPROVAL
-                resultText.text = plan
-                statusText.text = "اكتمل التحليل. الخطة تنتظر موافقتك."
-            } catch (e: Exception) {
-                val message = e.message ?: "خطأ غير معروف"
-                if (projectId > 0L) {
-                    withContext(Dispatchers.IO) {
-                        try {
-                            db.recordAttempt(
-                                projectId, engine, "planning",
-                                error = message
-                            )
-                            db.recordFailure(projectId, message)
-                        } catch (_: Exception) {
-                        }
-                    }
-                }
-                currentStatus = if (projectId > 0L) {
-                    AppDatabase.FAILED
-                } else null
-                statusText.text = "فشل التحليل: $message"
-                resultText.text = "لم تكتمل العملية."
-            } finally {
-                busy = false
-                updateControls()
-            }
-        }
-    }
-
-    private fun simpleReply(request: String): String? {
-        val normalized = request.trim().lowercase()
-            .replace("أ", "ا")
-            .replace("إ", "ا")
-            .replace("آ", "ا")
-            .replace("ة", "ه")
-            .replace("ـ", "")
-            .trim(' ', '.', '!', '؟', '?', '،')
-
-        return when (normalized) {
-            "مرحبا", "مرحبا بك", "السلام عليكم",
-            "السلام عليكم ورحمه الله وبركاته" ->
-                "وعليكم السلام ورحمة الله وبركاته!"
-            "اهلا", "اهلا بك", "اهلين", "هلا" ->
-                "أهلًا بك! كيف يمكنني مساعدتك؟"
-            "صباح الخير" -> "صباح النور!"
-            "مساء الخير" -> "مساء النور!"
-            "شكرا", "شكرا لك", "بارك الله فيك" ->
-                "العفو! أنا هنا لمساعدتك."
-            "من انت", "ما اسمك" ->
-                "أنا Bassel AI، مساعدك لتنظيم الطلبات وتحليلها."
-            else -> null
-        }
-    }
-
-    private fun requestGemini(
-        request: String,
-        apiKey: String
-    ): String {
-        val systemPrompt = """
-            أنت مساعد Bassel AI.
-            أجب باللغة العربية بوضوح ودقة.
-            أجب مباشرة عن السؤال البسيط.
-            إذا تطلب الطلب خطة، قدم خطوات عملية.
-            لا تدّع تنفيذ إجراءات خارجية.
-            ميّز بين الحقائق والافتراضات.
-        """.trimIndent()
-
-        val body = JSONObject().apply {
-            put("systemInstruction", JSONObject().put(
-                "parts", JSONArray().put(
-                    JSONObject().put("text", systemPrompt)
-                )
-            ))
-            put("contents", JSONArray().put(
-                JSONObject().put(
-                    "parts", JSONArray().put(
-                        JSONObject().put("text", request)
-                    )
-                )
-            ))
-        }
-
-        val response = postJson(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
-            apiKey, "x-goog-api-key", body, false
-        )
-
-        val candidates = response.optJSONArray("candidates")
-            ?: error("لم يُرجع Gemini نتائج.")
-        val parts = candidates.optJSONObject(0)
-            ?.optJSONObject("content")?.optJSONArray("parts")
-            ?: error("استجابة Gemini لا تحتوي على نص.")
-
-        return (0 until parts.length()).mapNotNull { i ->
-            parts.optJSONObject(i)?.optString("text")
-                ?.takeIf { it.isNotBlank() }
-        }.joinToString("\n").trim().ifBlank {
-            error("أعاد Gemini نتيجة فارغة.")
-        }
-    }
-
-    private fun requestGroq(
-        request: String,
-        apiKey: String
-    ): String {
-        val body = JSONObject().apply {
-            put("model", "openai/gpt-oss-120b")
-            put("temperature", 0.2)
-            put("max_completion_tokens", 2048)
-            put("messages", JSONArray()
-                .put(JSONObject().apply {
-                    put("role", "system")
-                    put("content",
-                        "أنت مساعد Bassel AI. أجب بالعربية بوضوح. " +
-                        "أجب مباشرة عن الأسئلة البسيطة، واستخدم خطة عند الحاجة. " +
-                        "لا تدّع تنفيذ إجراءات خارجية.")
-                })
-                .put(JSONObject().apply {
-                    put("role", "user")
-                    put("content", request)
-                })
-            )
-        }
-
-        val response = postJson(
-            "https://api.groq.com/openai/v1/chat/completions",
-            apiKey, "Authorization", body, true
-        )
-
-        val choices = response.optJSONArray("choices")
-            ?: error("لم يُرجع Groq نتائج.")
-
-        return choices.optJSONObject(0)
-            ?.optJSONObject("message")
-            ?.optString("content")?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: error("أعاد Groq نتيجة فارغة.")
-    }
-
-    private fun postJson(
-        url: String,
-        apiKey: String,
-        headerName: String,
-        body: JSONObject,
-        bearer: Boolean
-    ): JSONObject {
-        val connection = URL(url).openConnection() as HttpURLConnection
-        try {
-            connection.requestMethod = "POST"
-            connection.connectTimeout = 20000
-            connection.readTimeout = 60000
-            connection.doOutput = true
-            connection.setRequestProperty(
-                "Content-Type", "application/json; charset=UTF-8"
-            )
-            connection.setRequestProperty(
-                headerName, if (bearer) "Bearer $apiKey" else apiKey
-            )
-
-            connection.outputStream.use {
-                it.write(body.toString().toByteArray(Charsets.UTF_8))
+        btnAnalyze.setOnClickListener {
+            val prompt = inputRequest.text.toString().trim()
+            if (prompt.isEmpty()) {
+                txtResult.text = "الرجاء إدخال طلب أو فكرة لـ Bassel AI."
+                return@setOnClickListener
             }
 
-            val code = connection.responseCode
-            val stream = if (code in 200..299) {
-                connection.inputStream
-            } else connection.errorStream
-
-            val responseText = stream?.bufferedReader(Charsets.UTF_8)
-                ?.use { it.readText() }.orEmpty()
-
-            if (code !in 200..299) {
-                val message = try {
-                    JSONObject(responseText).optJSONObject("error")
-                        ?.optString("message")
-                } catch (_: Exception) {
-                    null
-                }
-                error("HTTP $code: ${
-                    message?.takeIf { it.isNotBlank() }
-                        ?: responseText.take(300)
-                }")
+            if (isNetworkCallInProgress) {
+                txtResult.text = "الرجاء الانتظار، النظام يعالج طلباً حالياً..."
+                return@setOnClickListener
             }
-            return JSONObject(responseText)
-        } finally {
-            connection.disconnect()
-        }
-    }
 
-    private fun recordDecision(approved: Boolean) {
-        if (busy) return
-        if (currentProjectId <= 0L ||
-            currentStatus != AppDatabase.WAITING_FOR_APPROVAL
-        ) {
-            statusText.text = "لا توجد خطة تنتظر القرار."
-            return
-        }
-
-        busy = true
-        updateControls()
-        statusText.text = "جارٍ تسجيل القرار..."
-
-        lifecycleScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    db.recordDecision(currentProjectId, approved)
-                }
-                currentStatus = if (approved) {
-                    AppDatabase.APPROVED
-                } else AppDatabase.REJECTED
-
-                statusText.text = if (approved) {
-                    "تم تسجيل الموافقة. لم يُنفذ إجراء تلقائيًا."
-                } else "تم تسجيل رفض الخطة."
-            } catch (e: Exception) {
-                statusText.text = "تعذر تسجيل القرار: ${e.message}"
-                restoreLatestProject()
-            } finally {
-                busy = false
-                updateControls()
-            }
-        }
-    }
-
-    private fun copyAnswer() {
-        val answer = resultText.text.toString().trim()
-        if (answer.isBlank() || answer == "ستظهر الإجابة هنا.") {
-            statusText.text = "لا توجد إجابة لنسخها."
-            return
-        }
-
-        try {
-            val clipboard = getSystemService(
-                Context.CLIPBOARD_SERVICE
-            ) as ClipboardManager
-            clipboard.setPrimaryClip(
-                ClipData.newPlainText("Bassel AI", answer)
-            )
-            statusText.text = "تم نسخ الإجابة."
-        } catch (e: Exception) {
-            statusText.text = "تعذر النسخ: ${e.message}"
+            startOrchestratorWorkflow(prompt)
         }
     }
 
     private fun restoreLatestProject() {
-        if (busy) return
-
-        lifecycleScope.launch {
-            try {
-                val project = withContext(Dispatchers.IO) {
-                    db.getLatestProject()
-                } ?: return@launch
-
+        try {
+            val project = dbHelper.getLatestProject()
+            if (project != null) {
                 currentProjectId = project.id
-                currentStatus = project.status
-                requestInput.setText(project.request)
-                resultText.text = project.plan ?: ""
-
-                statusText.text = when (project.status) {
-                    AppDatabase.ANALYSIS ->
-                        "الطلب محفوظ، ولم يكتمل تحليله."
-                    AppDatabase.WAITING_FOR_APPROVAL ->
-                        "الخطة تنتظر موافقتك."
-                    AppDatabase.APPROVED ->
-                        "تمت الموافقة. لم يُنفذ إجراء تلقائيًا."
-                    AppDatabase.REJECTED -> "تم رفض الخطة."
-                    AppDatabase.FAILED ->
-                        "فشل التحليل. يمكنك إرسال الطلب مجددًا."
-                    AppDatabase.COMPLETED -> "إجابة مباشرة محفوظة."
-                    else -> "حالة المشروع: ${project.status}"
+                when (project.status) {
+                    AppDatabase.STATUS_ANALYSIS -> {
+                        txtStatus.statusText("الحالة: جاري التحليل...")
+                    }
+                    AppDatabase.STATUS_WAITING_FOR_APPROVAL -> {
+                        txtResult.text = "استعادة المشروع (ID: ${project.id}):\n\n${project.plan}\n\n[الخطة تنتظر موافقتك الآن]"
+                        txtStatus.text = "الحالة: بانتظار الموافقة"
+                    }
+                    AppDatabase.STATUS_APPROVED -> {
+                        txtResult.text = "المشروع (ID: ${project.id}) مُعتمد وجاهز للتنفيذ/التصدير."
+                        txtStatus.text = "الحالة: معتمد"
+                    }
+                    else -> {
+                        txtStatus.text = "الحالة: ${project.status}"
+                    }
                 }
-                updateControls()
-            } catch (e: Exception) {
-                statusText.text = "تعذر استعادة المشروع: ${e.message}"
+            }
+        } catch (e: Exception) {
+            txtStatus.text = "خطأ في استعادة الحالة المحلية."
+        }
+    }
+
+    private fun startOrchestratorWorkflow(prompt: String) {
+        isNetworkCallInProgress = true
+        currentProjectId = dbHelper.createProject(prompt)
+
+        txtStatus.text = "المنسق (Orchestrator): جاري تحليل الطلب وتوجيهه تلقائياً..."
+        txtResult.text = "الطلب: $prompt\n\n[جاري العمل خلف الكواليس عبر النماذج الذكية...]"
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            val startTime = System.currentTimeMillis()
+            var planOutput: String? = null
+            var usedProvider = "gemini"
+            var errorMsg = ""
+
+            // 1. المحاولة الأولى عبر Gemini API (العقل الأساسي)
+            val geminiKey = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
+            if (geminiKey.isNotEmpty() && geminiKey != "YOUR_GEMINI_API_KEY") {
+                try {
+                    planOutput = callGeminiApi(prompt, geminiKey)
+                } catch (e: Exception) {
+                    errorMsg = e.message ?: "Gemini Timeout/Error"
+                }
+            } else {
+                errorMsg = "مفتاح Gemini غير متوفر"
+            }
+
+            // 2. التحويل التلقائي (Fallback) إلى Groq إذا فشل Gemini أو حدث Timeout
+            if (planOutput == null) {
+                usedProvider = "groq"
+                val groqKey = try { BuildConfig.GROQ_API_KEY } catch (e: Exception) { "" }
+                if (groqKey.isNotEmpty() && groqKey != "YOUR_GROQ_API_KEY") {
+                    try {
+                        planOutput = callGroqApi(prompt, groqKey)
+                    } catch (e: Exception) {
+                        errorMsg += " | Groq Error: ${e.message}"
+                    }
+                } else {
+                    errorMsg += " | مفتاح Groq غير متوفر"
+                }
+            }
+
+            val duration = System.currentTimeMillis() - startTime
+
+            withContext(Dispatchers.Main) {
+                isNetworkCallInProgress = false
+                if (planOutput != null) {
+                    // تسجيل المحاولة الناجحة
+                    dbHelper.logAttempt(currentProjectId, usedProvider, "planner", planOutput, "", duration)
+                    // حفظ الخطة وتحديث الحالة إلى بانتظار الموافقة
+                    dbHelper.savePlanAndWaitApproval(currentProjectId, planOutput)
+
+                    txtResult.text = "--- خطة العمل المقترحة (عبر $usedProvider) ---\n\n$planOutput\n\nهل توافق على هذه الخطة؟"
+                    txtStatus.text = "الحالة: بانتظار الموافقة"
+                } else {
+                    // تسجيل المحاولة الفاشلة
+                    dbHelper.logAttempt(currentProjectId, usedProvider, "planner", "", errorMsg, duration)
+                    dbHelper.updateProjectStatus(currentProjectId, AppDatabase.STATUS_FAILED)
+
+                    txtResult.text = "فشلت عملية المعالجة عبر جميع المحركات.\nالسبب: $errorMsg"
+                    txtStatus.text = "الحالة: فشل التحليل"
+                }
             }
         }
     }
 
-    override fun onDestroy() {
-        if (::db.isInitialized) db.close()
-        super.onDestroy()
+    private fun callGeminiApi(prompt: String, apiKey: String): String {
+        val urlString = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
+        val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            setRequestProperty("Content-Type", "application/json")
+            connectTimeout = 20000
+            readTimeout = 60000
+            doOutput = true
+        }
+
+        val jsonBody = JSONObject().apply {
+            put("contents", org.json.JSONArray().apply {
+                put(JSONObject().apply {
+                    put("parts", org.json.JSONArray().apply {
+                        put(JSONObject().put("text", "بصفتك المنسق الرئيسي لنظام Bassel AI، قم بتحليل الطلب التالي وضع خطة عمل مفصلة وواضحة: $prompt"))
+                    })
+                })
+            })
+        }
+
+        connection.outputStream.use { it.write(jsonBody.toString().toByteArray(Charsets.UTF_8)) }
+
+        if (connection.responseCode != 200) {
+            throw RuntimeException("HTTP Error Code: ${connection.responseCode}")
+        }
+
+        val responseString = connection.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
+        val jsonResponse = JSONObject(responseString)
+        val candidates = jsonResponse.optJSONArray("candidates") ?: throw RuntimeException("استجابة غير صالحة من Gemini")
+        
+        return candidates.optJSONObject(0)
+            ?.optJSONObject("content")
+            ?.optJSONArray("parts")
+            ?.optJSONObject(0)
+            ?.optString("text", "") ?: throw RuntimeException("محتوى فارغ من Gemini")
     }
+
+    private fun callGroqApi(prompt: String, apiKey: String): String {
+        val urlString = "https://api.groq.com/openai/v1/chat/completions"
+        val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Authorization", "Bearer $apiKey")
+            connectTimeout = 15000
+            readTimeout = 45000
+            doOutput = true
+        }
+
+        val jsonBody = JSONObject().apply {
+            put("model", "llama3-8b-8192")
+            put("messages", org.json.JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", "بصفتك محرك التنفيذ المساعد لنظام Bassel AI، حلل الطلب التالي واقترح خطوات دقيقة: $prompt")
+                })
+            })
+        }
+
+        connection.outputStream.use { it.write(jsonBody.toString().toByteArray(Charsets.UTF_8)) }
+
+        if (connection.responseCode != 200) {
+            throw RuntimeException("Groq HTTP Error: ${connection.responseCode}")
+        }
+
+        val responseString = connection.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
+        val jsonResponse = JSONObject(responseString)
+        val choices = jsonResponse.optJSONArray("choices") ?: throw RuntimeException("استجابة غير صالحة من Groq")
+        
+        return choices.optJSONObject(0)
+            ?.optJSONObject("message")
+            ?.optString("content", "") ?: throw RuntimeException("محتوى فارغ من Groq")
+    }
+}
+
+// امتداد مساعد لتبسيط تحديث حالة النص إن لم يكن معرفاً
+private fun TextView.statusText(text: String) {
+    this.text = text
 }
