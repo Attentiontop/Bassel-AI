@@ -1,4 +1,4 @@
-package com.basselai
+package com.attentiontop.basselai
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -191,7 +191,7 @@ class MainActivity : Activity() {
     private fun edit(hintText: String, lines: Int) = EditText(this).apply {
         hint = hintText
         setHintTextColor(Color.rgb(125, 139, 160))
-        setTextColor(foreground)
+        setTextColor(this@MainActivity.foreground)
         textSize = 14f
         setPadding(dp(12), dp(10), dp(12), dp(10))
         setBackgroundColor(panel)
@@ -288,7 +288,7 @@ class MainActivity : Activity() {
         }
         fun field(hint: String, value: String = "", secret: Boolean = false): EditText {
             return EditText(this).apply {
-                this.hint = hint; setText(value); setTextColor(foreground); setHintTextColor(muted)
+                this.hint = hint; setText(value); setTextColor(this@MainActivity.foreground); setHintTextColor(this@MainActivity.muted)
                 if (secret) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 setSingleLine(true); setPadding(dp(8), dp(8), dp(8), dp(8))
                 setBackgroundColor(panel); box.addView(this)
@@ -497,7 +497,7 @@ class MainActivity : Activity() {
                 }
                 if (proposals.isEmpty()) throw IllegalStateException("لم يُنتج أي نموذج مقترحًا صالحًا.")
                 proposalArchive.clear()
-                proposals.forEach { proposalArchive.add(proposal.model.name to proposal.text.take(12000)) }
+                proposals.forEach { proposal -> proposalArchive.add(proposal.model.name to proposal.text.take(12000)) }
 
                 setStatus("المرحلة 4/5: مراجعة مستقلة للمقترحات ومقارنة النتائج…")
                 val reviewerResults = healthy.map { reviewer ->
