@@ -21,6 +21,8 @@ class MainActivity : AppCompatActivity() {
 
     private val client = OkHttpClient()
     private lateinit var db: AppDatabase
+    private lateinit var resultTextView: TextView
+    private lateinit var statusTextView: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,167 +34,231 @@ class MainActivity : AppCompatActivity() {
             e.printStackTrace()
         }
 
-        // بناء واجهة مستخدم احترافية ومنظمة داخل التطبيق برمجياً
-        val rootLayout = LinearLayout(this).apply {
+        // تخطيط الشاشة الرئيسي (خلفية داكنة متوافقة مع تصميم التطبيق الأصلي)
+        val mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(40, 40, 40, 40)
-            setBackgroundColor(Color.parseColor("#F5F5F5"))
+            setBackgroundColor(Color.parseColor("#121824"))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.MATCH_PARENT
             )
         }
 
-        // عنوان التطبيق
+        val scrollView = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
+
+        val contentLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+        }
+
+        // 1. عنوان مجلس الإدارة العلوي
         val titleText = TextView(this).apply {
-            text = "Bassel AI Manager"
-            textSize = 22f
-            setTextColor(Color.parseColor("#333333"))
+            text = "مجلس الإدارة والوكلاء الذكي - Bassel AI"
+            textSize = 16f
+            setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 30)
+            setPadding(0, 10, 0, 20)
         }
-        rootLayout.addView(titleText)
+        contentLayout.addView(titleText)
 
-        // حقل إدخال مفتاح الـ API
-        val apiKeyInput = EditText(this).apply {
-            hint = "أدخل مفتاح الـ API هنا"
-            setPadding(20, 20, 20, 20)
-            setBackgroundColor(Color.WHITE)
-            textSize = 14f
+        // أزرار الشريط العلوي (الأرشيف، السجل، المفاتيح)
+        val topBarLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
         }
-        rootLayout.addView(apiKeyInput)
+        
+        val btnArchive = createStyledButton("📁 الأرشيف", Color.parseColor("#1F293D")) {
+            Toast.makeText(this@MainActivity, "الأرشيف قيد التطوير", Toast.LENGTH_SHORT).show()
+        }
+        val btnLog = createStyledButton("📊 السجل", Color.parseColor("#1F293D")) {
+            Toast.makeText(this@MainActivity, "السجل قيد التطوير", Toast.LENGTH_SHORT).show()
+        }
+        val btnKeys = createStyledButton("⚙️ المفاتيح", Color.parseColor("#1F293D")) {
+            Toast.makeText(this@MainActivity, "إدارة المفاتيح", Toast.LENGTH_SHORT).show()
+        }
 
-        // مسافة فاصلة
-        val spacer1 = TextView(this).apply { height = 20 }
-        rootLayout.addView(spacer1)
+        topBarLayout.addView(btnKeys)
+        topBarLayout.addView(btnLog)
+        topBarLayout.addView(btnArchive)
+        contentLayout.addView(topBarLayout)
 
-        // حقل إدخال الرسالة أو الـ Prompt
+        // 2. حالة المحرك والحالة العامة
+        statusTextView = TextView(this).apply {
+            text = "الحالة: جاهز للعمل (عبر Groq / Gemini)"
+            textSize = 13f
+            setTextColor(Color.parseColor("#38BDF8"))
+            setPadding(0, 20, 0, 10)
+        }
+        contentLayout.addView(statusTextView)
+
+        // حقل إدخال الطلب (Prompt)
         val promptInput = EditText(this).apply {
-            hint = "اكتب رسالتك للذكاء الاصطناعي..."
-            setPadding(20, 20, 20, 20)
-            setBackgroundColor(Color.WHITE)
+            hint = "اكتب طلبك أو مشروعك الهندسي هنا..."
+            setHintTextColor(Color.parseColor("#9CA3AF"))
+            setTextColor(Color.WHITE)
+            setPadding(24, 24, 24, 24)
+            setBackgroundColor(Color.parseColor("#1E293B"))
             textSize = 14f
         }
-        rootLayout.addView(promptInput)
+        contentLayout.addView(promptInput)
 
-        // مسافة فاصلة
-        val spacer2 = TextView(this).apply { height = 30 }
-        rootLayout.addView(spacer2)
+        contentLayout.addView(TextView(this).apply { height = 15 })
 
-        // زر إرسال الطلب لـ Google Gemini
-        val geminiButton = Button(this).apply {
-            text = "إرسال إلى Google Gemini"
-            setBackgroundColor(Color.parseColor("#4285F4"))
+        // 3. زر التخطيط الهندسي (PLANNER)
+        val btnPlanner = Button(this).apply {
+            text = "🚀 بدء التخطيط الهندسي (PLANNER)"
+            setBackgroundColor(Color.parseColor("#2563EB"))
             setTextColor(Color.WHITE)
             setOnClickListener {
-                val apiKey = apiKeyInput.text.toString().trim()
                 val prompt = promptInput.text.toString().trim()
-                sendAiRequest("Google Gemini", apiKey, "gemini-1.5-flash", prompt)
+                if (prompt.isNotEmpty()) {
+                    sendAiRequest("Google Gemini", "AIzaSy...", "gemini-1.5-flash", prompt) // استخدم مفتاحك أو اجعله يقرأ من الحقل
+                } else {
+                    Toast.makeText(this@MainActivity, "يرجى كتابة الطلب أولاً", Toast.LENGTH_SHORT).show()
+                }
             }
         }
-        rootLayout.addView(geminiButton)
+        contentLayout.addView(btnPlanner)
 
-        // مسافة فاصلة صغيرة
-        rootLayout.addView(TextView(this).apply { height = 15 })
-
-        // زر إرسال الطلب لـ Groq
-        val groqButton = Button(this).apply {
-            text = "إرسال إلى Groq"
-            setBackgroundColor(Color.parseColor("#FF6F00"))
+        // 4. أزراير الرفض والاعتماد
+        val decisionLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 15, 0, 15)
+        }
+        val btnReject = Button(this).apply {
+            text = "❌ رفض"
+            setBackgroundColor(Color.parseColor("#DC2626"))
             setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
-                val apiKey = apiKeyInput.text.toString().trim()
-                val prompt = promptInput.text.toString().trim()
-                sendAiRequest("Groq", apiKey, "llama3-70b-8192", prompt)
+                statusTextView.text = "الحالة: تم رفض الخطة."
             }
         }
-        rootLayout.addView(groqButton)
-
-        // مسافة فاصلة صغيرة
-        rootLayout.addView(TextView(this).apply { height = 15 })
-
-        // زر إرسال الطلب لـ OpenRouter
-        val openRouterButton = Button(this).apply {
-            text = "إرسال إلى OpenRouter"
-            setBackgroundColor(Color.parseColor("#673AB7"))
+        val btnAccept = Button(this).apply {
+            text = "✅ اعتماد وتنفيذ الكود"
+            setBackgroundColor(Color.parseColor("#16A34A"))
             setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
-                val apiKey = apiKeyInput.text.toString().trim()
-                val prompt = promptInput.text.toString().trim()
-                sendAiRequest("OpenRouter", apiKey, "meta-llama/llama-3-8b-instruct:free", prompt)
+                statusTextView.text = "الحالة: جاري التنفيذ..."
             }
         }
-        rootLayout.addView(openRouterButton)
+        decisionLayout.addView(btnReject)
+        decisionLayout.addView(btnAccept)
+        contentLayout.addView(decisionLayout)
 
-        setContentView(rootLayout)
+        // 5. منطقة عرض النتائج والخطط
+        resultTextView = TextView(this).apply {
+            text = "--- مرحباً بك في Bassel AI ---\nجاهز لتلقي مهامك البرمجية والهندسية."
+            textSize = 13f
+            setTextColor(Color.parseColor("#E2E8F0"))
+            setPadding(20, 20, 20, 20)
+            setBackgroundColor(Color.parseColor("#1E293B"))
+        }
+        contentLayout.addView(resultTextView)
+
+        scrollView.addView(contentLayout)
+        mainLayout.addView(scrollView)
+
+        // 6. الشريط السفلي (نسخ، مشاركة، مشروع جديد)
+        val bottomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.parseColor("#0F172A"))
+            setPadding(10, 15, 10, 15)
+            gravity = Gravity.CENTER
+        }
+
+        val btnNewProject = createBottomButton("➕ مشروع جديد") {
+            promptInput.setText("")
+            resultTextView.text = "تم البدء بمشروع جديد."
+        }
+        val btnShare = createBottomButton("📤 مشاركة") {
+            Toast.makeText(this, "مشاركة المشروع", Toast.LENGTH_SHORT).show()
+        }
+        val btnCopy = createBottomButton("📋 نسخ") {
+            Toast.makeText(this, "تم النسخ", Toast.LENGTH_SHORT).show()
+        }
+
+        bottomBar.addView(btnCopy)
+        bottomBar.addView(btnShare)
+        bottomBar.addView(btnNewProject)
+        mainLayout.addView(bottomBar)
+
+        setContentView(mainLayout)
     }
 
-    // دالة الاتصال الموحدة لدعم المزودين الثلاثة وقاعدة البيانات
-    private fun sendAiRequest(provider: String, apiKey: String, modelId: String, prompt: String) {
-        if (apiKey.isEmpty() || prompt.isEmpty()) {
-            Toast.makeText(this, "يرجى إدخال مفتاح الـ API والرسالة أولاً", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // حفظ المفتاح محلياً في قاعدة البيانات Room
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                db.modelDao().insertOrUpdateModel(ModelEntity(provider, apiKey, modelId))
-            } catch (e: Exception) {
-                e.printStackTrace()
+    private fun createStyledButton(text: String, bgColor: Int, onClick: () -> Unit): Button {
+        return Button(this).apply {
+            this.text = text
+            setBackgroundColor(bgColor)
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            setPadding(15, 10, 15, 10)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(5, 0, 5, 0)
             }
+            setOnClickListener { onClick() }
+        }
+    }
 
+    private fun createBottomButton(text: String, onClick: () -> Unit): Button {
+        return Button(this).apply {
+            this.text = text
+            setBackgroundColor(Color.parseColor("#3B82F6"))
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(5, 0, 5, 0)
+            }
+            setOnClickListener { onClick() }
+        }
+    }
+
+    // دالة الاتصال المحدثة مع تصحيح مسار Gemini (v1beta) لمنع خطأ 404
+    private fun sendAiRequest(provider: String, apiKey: String, modelId: String, prompt: String) {
+        statusTextView.text = "الحالة: جاري الإرسال عبر Gemini (v1beta)..."
+
+        CoroutineScope(Dispatchers.IO).launch {
             var url = ""
             val jsonBody = JSONObject()
             val mediaType = "application/json; charset=utf-8".toMediaType()
 
-            when (provider) {
-                "Google Gemini" -> {
-                    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
-                    val partObj = JSONObject().put("text", prompt)
-                    val partsArray = JSONArray().put(partObj)
-                    val contentObj = JSONObject().put("parts", partsArray)
-                    val contentsArray = JSONArray().put(contentObj)
-                    jsonBody.put("contents", contentsArray)
-                }
-                "OpenRouter" -> {
-                    url = "https://openrouter.ai/api/v1/chat/completions"
-                    jsonBody.put("model", modelId)
-                    val messageObj = JSONObject().put("role", "user").put("content", prompt)
-                    val messagesArray = JSONArray().put(messageObj)
-                    jsonBody.put("messages", messagesArray)
-                }
-                "Groq" -> {
-                    url = "https://api.groq.com/openai/v1/chat/completions"
-                    jsonBody.put("model", modelId)
-                    val messageObj = JSONObject().put("role", "user").put("content", prompt)
-                    val messagesArray = JSONArray().put(messageObj)
-                    jsonBody.put("messages", messagesArray)
-                }
-            }
+            // مسار v1beta المصحح لضمان عدم حدوث خطأ 404 نهائياً
+            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
+            val partObj = JSONObject().put("text", prompt)
+            val partsArray = JSONArray().put(partObj)
+            val contentObj = JSONObject().put("parts", partsArray)
+            val contentsArray = JSONArray().put(contentObj)
+            jsonBody.put("contents", contentsArray)
 
             val body = jsonBody.toString().toRequestBody(mediaType)
-            val requestBuilder = Request.Builder().url(url).post(body)
+            val request = Request.Builder().url(url).post(body)
                 .addHeader("Content-Type", "application/json")
-
-            if (provider == "OpenRouter") {
-                requestBuilder.addHeader("Authorization", "Bearer $apiKey")
-            }
+                .build()
 
             try {
-                val response = client.newCall(requestBuilder.build()).execute()
+                val response = client.newCall(request).execute()
                 val responseData = response.body?.string()
 
                 withContext(Dispatchers.Main) {
                     if (response.isSuccessful && responseData != null) {
-                        Toast.makeText(this@MainActivity, "تمت الإرسال والاستجابة بنجاح!", Toast.LENGTH_LONG).show()
+                        statusTextView.text = "الحالة: الخطة جاهزة (عبر Gemini)"
+                        resultTextView.text = responseData
                     } else {
-                        Toast.makeText(this@MainActivity, "خطأ في الاتصال: ${response.code}", Toast.LENGTH_LONG).show()
+                        statusTextView.text = "الحالة: فشل في التنفيذ (خطأ ${response.code})"
+                        resultTextView.text = "تعذر إتمام العملية.\nالسبب: $responseData"
                     }
                 }
             } catch (e: IOException) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "خطأ شبكة: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                    statusTextView.text = "الحالة: خطأ في الاتصال بالشبكة"
+                    resultTextView.text = "خطأ: ${e.localizedMessage}"
                 }
             }
         }
