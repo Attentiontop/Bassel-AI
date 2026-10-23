@@ -14,7 +14,6 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         private const val DATABASE_NAME = "bassel_ai.db"
         private const val DATABASE_VERSION = 2
 
-        // جدول المشاريع
         const val TABLE_PROJECTS = "projects"
         const val COLUMN_ID = "id"
         const val COLUMN_REQUEST = "request"
@@ -23,28 +22,22 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         const val COLUMN_CREATED_AT = "created_at"
         const val COLUMN_UPDATED_AT = "updated_at"
 
-        // جدول المحاولات (Attempts) لتتبع أداء الوكلاء والنماذج
         const val TABLE_ATTEMPTS = "attempts"
         const val ATTEMPT_ID = "id"
         const val ATTEMPT_PROJECT_ID = "project_id"
-        const val ATTEMPT_PROVIDER = "provider" // مثل gemini أو groq
-        const val ATTEMPT_ROLE = "role" // مثل orchestrator, planner, execution
+        const val ATTEMPT_PROVIDER = "provider"
+        const val ATTEMPT_ROLE = "role"
         const val ATTEMPT_OUTPUT = "output"
         const val ATTEMPT_ERROR = "error"
         const val ATTEMPT_DURATION_MS = "duration_ms"
         const val ATTEMPT_CREATED_AT = "created_at"
 
-        // الحالات الأساسية المعتمدة
         const val STATUS_ANALYSIS = "ANALYSIS"
         const val STATUS_WAITING_FOR_APPROVAL = "WAITING_FOR_APPROVAL"
         const val STATUS_APPROVED = "APPROVED"
         const val STATUS_REJECTED = "REJECTED"
         const val STATUS_FAILED = "FAILED"
         const val STATUS_COMPLETED = "COMPLETED"
-    }
-
-    override fun db(db: SQLiteDatabase?) {
-        // تم تصحيح طريقة الاستدعاء لضمان التوافقية
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -71,7 +64,6 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // الحفاظ على البيانات مع الترحيل الآمن عند التحديث
         if (oldVersion < 2) {
             db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_ATTEMPTS (" +
                     "$ATTEMPT_ID INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -90,7 +82,6 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         return sdf.format(Date())
     }
 
-    // إنشاء مشروع جديد بالحالة الافتتاحية ANALYSIS وبدون حيل سلاسل نصية فارغة
     fun createProject(request: String): Long {
         val db = this.writableDatabase
         val currentTime = getCurrentTimestamp()
@@ -104,7 +95,6 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         return db.insert(TABLE_PROJECTS, null, values)
     }
 
-    // حفظ خطة العمل وتحديث الحالة إلى WAITING_FOR_APPROVAL بمعاملة نظيفة وآمنة
     fun savePlanAndWaitApproval(projectId: Long, plan: String): Boolean {
         val db = this.writableDatabase
         val currentTime = getCurrentTimestamp()
@@ -117,7 +107,6 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         return rowsAffected > 0
     }
 
-    // تسجيل محاولة معالجة عبر النماذج (Gemini أو Groq)
     fun logAttempt(projectId: Long, provider: String, role: String, output: String, error: String, durationMs: Long) {
         val db = this.writableDatabase
         val values = ContentValues().apply {
@@ -132,7 +121,6 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         db.insert(TABLE_ATTEMPTS, null, values)
     }
 
-    // تسجيل قرار المستخدم (موافقة أو رفض)
     fun updateProjectStatus(projectId: Long, status: String): Boolean {
         val db = this.writableDatabase
         val values = ContentValues().apply {
@@ -142,7 +130,6 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         return db.update(TABLE_PROJECTS, values, "$COLUMN_ID = ?", arrayOf(projectId.toString())) > 0
     }
 
-    // استعادة آخر مشروع نشط لمنع ضياع السياق
     fun getLatestProject(): ProjectModel? {
         val db = this.readableDatabase
         val cursor = db.rawQuery("SELECT * FROM $TABLE_PROJECTS ORDER BY $COLUMN_ID DESC LIMIT 1", null)
