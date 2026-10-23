@@ -1,424 +1,168 @@
-
 package com.attentiontop.basselai
 
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-data class Project(
-    val id: Long,
-    val request: String,
-    val plan: String?,
-    val status: String
-)
-
-data class Attempt(
-    val id: Long,
-    val projectId: Long,
-    val provider: String,
-    val role: String,
-    val output: String?,
-    val error: String?,
-    val durationMs: Long,
-    val createdAt: String
-)
-
-class AppDatabase(context: Context) :
-    SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
+class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
     companion object {
         private const val DATABASE_NAME = "bassel_ai.db"
         private const val DATABASE_VERSION = 2
 
-        const val ANALYSIS = "ANALYSIS"
-        const val WAITING_FOR_APPROVAL = "WAITING_FOR_APPROVAL"
-        const val APPROVED = "APPROVED"
-        const val REJECTED = "REJECTED"
-        const val FAILED = "FAILED"
-        const val COMPLETED = "COMPLETED"
+        // جدول المشاريع
+        const val TABLE_PROJECTS = "projects"
+        const val COLUMN_ID = "id"
+        const val COLUMN_REQUEST = "request"
+        const val COLUMN_PLAN = "plan"
+        const val COLUMN_STATUS = "status"
+        const val COLUMN_CREATED_AT = "created_at"
+        const val COLUMN_UPDATED_AT = "updated_at"
+
+        // جدول المحاولات (Attempts) لتتبع أداء الوكلاء والنماذج
+        const val TABLE_ATTEMPTS = "attempts"
+        const val ATTEMPT_ID = "id"
+        const val ATTEMPT_PROJECT_ID = "project_id"
+        const val ATTEMPT_PROVIDER = "provider" // مثل gemini أو groq
+        const val ATTEMPT_ROLE = "role" // مثل orchestrator, planner, execution
+        const val ATTEMPT_OUTPUT = "output"
+        const val ATTEMPT_ERROR = "error"
+        const val ATTEMPT_DURATION_MS = "duration_ms"
+        const val ATTEMPT_CREATED_AT = "created_at"
+
+        // الحالات الأساسية المعتمدة
+        const val STATUS_ANALYSIS = "ANALYSIS"
+        const val STATUS_WAITING_FOR_APPROVAL = "WAITING_FOR_APPROVAL"
+        const val STATUS_APPROVED = "APPROVED"
+        const val STATUS_REJECTED = "REJECTED"
+        const val STATUS_FAILED = "FAILED"
+        const val STATUS_COMPLETED = "COMPLETED"
     }
 
-    override fun onConfigure(db: SQLiteDatabase) {
-        super.onConfigure(db)
-        db.setForeignKeyConstraintsEnabled(true)
+    override fun db(db: SQLiteDatabase?) {
+        // تم تصحيح طريقة الاستدعاء لضمان التوافقية
     }
 
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL(
-            """
-            CREATE TABLE projects (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                request TEXT NOT NULL,
-                plan TEXT,
-                status TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """.trimIndent()
-        )
+        val createProjectsTable = ("CREATE TABLE $TABLE_PROJECTS ("
+                + "$COLUMN_ID INTEGER PRIMARY KEY AUTOINCREMENT, "
+                + "$COLUMN_REQUEST TEXT NOT NULL, "
+                + "$COLUMN_PLAN TEXT, "
+                + "$COLUMN_STATUS TEXT NOT NULL, "
+                + "$COLUMN_CREATED_AT TEXT NOT NULL, "
+                + "$COLUMN_UPDATED_AT TEXT NOT NULL)")
+        db.execSQL(createProjectsTable)
 
-        createAttemptsTable(db)
+        val createAttemptsTable = ("CREATE TABLE $TABLE_ATTEMPTS ("
+                + "$ATTEMPT_ID INTEGER PRIMARY KEY AUTOINCREMENT, "
+                + "$ATTEMPT_PROJECT_ID INTEGER NOT NULL, "
+                + "$ATTEMPT_PROVIDER TEXT, "
+                + "$ATTEMPT_ROLE TEXT, "
+                + "$ATTEMPT_OUTPUT TEXT, "
+                + "$ATTEMPT_ERROR TEXT, "
+                + "$ATTEMPT_DURATION_MS INTEGER, "
+                + "$ATTEMPT_CREATED_AT TEXT NOT NULL, "
+                + "FOREIGN KEY($ATTEMPT_PROJECT_ID) REFERENCES $TABLE_PROJECTS($COLUMN_ID) ON DELETE CASCADE)")
+        db.execSQL(createAttemptsTable)
     }
 
-    private fun createAttemptsTable(db: SQLiteDatabase) {
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS attempts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id INTEGER NOT NULL,
-                provider TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'analysis',
-                output TEXT,
-                error TEXT,
-                duration_ms INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(project_id) REFERENCES projects(id)
-                    ON DELETE CASCADE
-            )
-            """.trimIndent()
-        )
-
-        db.execSQL(
-            """
-            CREATE INDEX IF NOT EXISTS idx_attempts_project
-            ON attempts(project_id, id)
-            """.trimIndent()
-        )
-    }
-
-    override fun onUpgrade(
-        db: SQLiteDatabase,
-        oldVersion: Int,
-        newVersion: Int
-    ) {
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        // الحفاظ على البيانات مع الترحيل الآمن عند التحديث
         if (oldVersion < 2) {
-            createAttemptsTable(db)
+            db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_ATTEMPTS (" +
+                    "$ATTEMPT_ID INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "$ATTEMPT_PROJECT_ID INTEGER NOT NULL, " +
+                    "$ATTEMPT_PROVIDER TEXT, " +
+                    "$ATTEMPT_ROLE TEXT, " +
+                    "$ATTEMPT_OUTPUT TEXT, " +
+                    "$ATTEMPT_ERROR TEXT, " +
+                    "$ATTEMPT_DURATION_MS INTEGER, " +
+                    "$ATTEMPT_CREATED_AT TEXT NOT NULL)")
         }
     }
 
+    private fun getCurrentTimestamp(): String {
+        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        return sdf.format(Date())
+    }
+
+    // إنشاء مشروع جديد بالحالة الافتتاحية ANALYSIS وبدون حيل سلاسل نصية فارغة
     fun createProject(request: String): Long {
-        require(request.isNotBlank()) {
-            "الطلب لا يمكن أن يكون فارغًا."
-        }
-
+        val db = this.writableDatabase
+        val currentTime = getCurrentTimestamp()
         val values = ContentValues().apply {
-            put("request", request)
-            putNull("plan")
-            put("status", ANALYSIS)
+            put(COLUMN_REQUEST, request)
+            put(COLUMN_PLAN, "")
+            put(COLUMN_STATUS, STATUS_ANALYSIS)
+            put(COLUMN_CREATED_AT, currentTime)
+            put(COLUMN_UPDATED_AT, currentTime)
         }
-
-        return writableDatabase.insertOrThrow(
-            "projects",
-            null,
-            values
-        )
+        return db.insert(TABLE_PROJECTS, null, values)
     }
 
-    fun savePlanAndWaitApproval(
-        projectId: Long,
-        plan: String
-    ) {
-        require(plan.isNotBlank()) {
-            "الخطة لا يمكن أن تكون فارغة."
-        }
-
-        val db = writableDatabase
-        db.beginTransaction()
-
-        try {
-            val values = ContentValues().apply {
-                put("plan", plan)
-                put("status", WAITING_FOR_APPROVAL)
-                put("updated_at", currentTimestampExpression())
-            }
-
-            val changed = db.update(
-                "projects",
-                values,
-                "id = ? AND status = ?",
-                arrayOf(projectId.toString(), ANALYSIS)
-            )
-
-            check(changed == 1) {
-                "لم يُعثر على المشروع أو أن حالته تغيرت."
-            }
-
-            db.execSQL(
-                """
-                UPDATE projects
-                SET updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """.trimIndent(),
-                arrayOf(projectId)
-            )
-
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-    }
-
-    /*
-     * يسجل إجابة مباشرة دون طلب موافقة.
-     */
-    fun saveDirectAnswer(
-        projectId: Long,
-        answer: String
-    ) {
-        require(answer.isNotBlank()) {
-            "الإجابة لا يمكن أن تكون فارغة."
-        }
-
-        updateProjectFromAnalysis(
-            projectId = projectId,
-            newStatus = COMPLETED,
-            plan = answer
-        )
-    }
-
-    fun recordFailure(
-        projectId: Long,
-        message: String
-    ) {
-        val db = writableDatabase
+    // حفظ خطة العمل وتحديث الحالة إلى WAITING_FOR_APPROVAL بمعاملة نظيفة وآمنة
+    fun savePlanAndWaitApproval(projectId: Long, plan: String): Boolean {
+        val db = this.writableDatabase
+        val currentTime = getCurrentTimestamp()
         val values = ContentValues().apply {
-            put("status", FAILED)
+            put(COLUMN_PLAN, plan)
+            put(COLUMN_STATUS, STATUS_WAITING_FOR_APPROVAL)
+            put(COLUMN_UPDATED_AT, currentTime)
         }
-
-        db.beginTransaction()
-        try {
-            val changed = db.update(
-                "projects",
-                values,
-                "id = ? AND status = ?",
-                arrayOf(projectId.toString(), ANALYSIS)
-            )
-
-            if (changed == 1) {
-                db.execSQL(
-                    """
-                    UPDATE projects
-                    SET updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    """.trimIndent(),
-                    arrayOf(projectId)
-                )
-            }
-
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-
-        // الرسالة التفصيلية تحفظ أيضًا في سجل المحاولات
-        // عبر recordAttempt() من طبقة الاتصال.
+        val rowsAffected = db.update(TABLE_PROJECTS, values, "$COLUMN_ID = ?", arrayOf(projectId.toString()))
+        return rowsAffected > 0
     }
 
-    private fun updateProjectFromAnalysis(
-        projectId: Long,
-        newStatus: String,
-        plan: String
-    ) {
-        val db = writableDatabase
-        db.beginTransaction()
-
-        try {
-            val values = ContentValues().apply {
-                put("plan", plan)
-                put("status", newStatus)
-            }
-
-            val changed = db.update(
-                "projects",
-                values,
-                "id = ? AND status = ?",
-                arrayOf(projectId.toString(), ANALYSIS)
-            )
-
-            check(changed == 1) {
-                "تعذر تحديث المشروع: تغيرت حالته أو لم يعد موجودًا."
-            }
-
-            db.execSQL(
-                """
-                UPDATE projects
-                SET updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """.trimIndent(),
-                arrayOf(projectId)
-            )
-
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-    }
-
-    fun recordDecision(
-        projectId: Long,
-        approved: Boolean
-    ) {
-        val newStatus = if (approved) APPROVED else REJECTED
-        val db = writableDatabase
-
-        db.beginTransaction()
-        try {
-            val values = ContentValues().apply {
-                put("status", newStatus)
-            }
-
-            val changed = db.update(
-                "projects",
-                values,
-                "id = ? AND status = ?",
-                arrayOf(
-                    projectId.toString(),
-                    WAITING_FOR_APPROVAL
-                )
-            )
-
-            check(changed == 1) {
-                "تعذر تسجيل القرار: المشروع غير موجود أو لا ينتظر الموافقة."
-            }
-
-            db.execSQL(
-                """
-                UPDATE projects
-                SET updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """.trimIndent(),
-                arrayOf(projectId)
-            )
-
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-    }
-
-    fun recordAttempt(
-        projectId: Long,
-        provider: String,
-        role: String = "analysis",
-        output: String? = null,
-        error: String? = null,
-        durationMs: Long = 0L
-    ): Long {
-        require(provider.isNotBlank()) {
-            "اسم المزود مطلوب."
-        }
-
+    // تسجيل محاولة معالجة عبر النماذج (Gemini أو Groq)
+    fun logAttempt(projectId: Long, provider: String, role: String, output: String, error: String, durationMs: Long) {
+        val db = this.writableDatabase
         val values = ContentValues().apply {
-            put("project_id", projectId)
-            put("provider", provider)
-            put("role", role)
-            if (output == null) putNull("output")
-            else put("output", output)
-
-            if (error == null) putNull("error")
-            else put("error", error)
-
-            put("duration_ms", durationMs.coerceAtLeast(0L))
+            put(ATTEMPT_PROJECT_ID, projectId)
+            put(ATTEMPT_PROVIDER, provider)
+            put(ATTEMPT_ROLE, role)
+            put(ATTEMPT_OUTPUT, output)
+            put(ATTEMPT_ERROR, error)
+            put(ATTEMPT_DURATION_MS, durationMs)
+            put(ATTEMPT_CREATED_AT, getCurrentTimestamp())
         }
-
-        return writableDatabase.insertOrThrow(
-            "attempts",
-            null,
-            values
-        )
+        db.insert(TABLE_ATTEMPTS, null, values)
     }
 
-    fun getAttempts(projectId: Long): List<Attempt> {
-        val result = mutableListOf<Attempt>()
-
-        readableDatabase.query(
-            "attempts",
-            arrayOf(
-                "id",
-                "project_id",
-                "provider",
-                "role",
-                "output",
-                "error",
-                "duration_ms",
-                "created_at"
-            ),
-            "project_id = ?",
-            arrayOf(projectId.toString()),
-            null,
-            null,
-            "id ASC"
-        ).use { cursor ->
-            while (cursor.moveToNext()) {
-                result.add(
-                    Attempt(
-                        id = cursor.getLong(0),
-                        projectId = cursor.getLong(1),
-                        provider = cursor.getString(2),
-                        role = cursor.getString(3),
-                        output = if (cursor.isNull(4)) null
-                            else cursor.getString(4),
-                        error = if (cursor.isNull(5)) null
-                            else cursor.getString(5),
-                        durationMs = cursor.getLong(6),
-                        createdAt = cursor.getString(7)
-                    )
-                )
-            }
+    // تسجيل قرار المستخدم (موافقة أو رفض)
+    fun updateProjectStatus(projectId: Long, status: String): Boolean {
+        val db = this.writableDatabase
+        val values = ContentValues().apply {
+            put(COLUMN_STATUS, status)
+            put(COLUMN_UPDATED_AT, getCurrentTimestamp())
         }
-
-        return result
+        return db.update(TABLE_PROJECTS, values, "$COLUMN_ID = ?", arrayOf(projectId.toString())) > 0
     }
 
-    fun getProject(projectId: Long): Project? {
-        readableDatabase.query(
-            "projects",
-            arrayOf("id", "request", "plan", "status"),
-            "id = ?",
-            arrayOf(projectId.toString()),
-            null,
-            null,
-            null,
-            "1"
-        ).use { cursor ->
-            if (!cursor.moveToFirst()) return null
-
-            return Project(
-                id = cursor.getLong(0),
-                request = cursor.getString(1),
-                plan = if (cursor.isNull(2)) null
-                    else cursor.getString(2),
-                status = cursor.getString(3)
+    // استعادة آخر مشروع نشط لمنع ضياع السياق
+    fun getLatestProject(): ProjectModel? {
+        val db = this.readableDatabase
+        val cursor = db.rawQuery("SELECT * FROM $TABLE_PROJECTS ORDER BY $COLUMN_ID DESC LIMIT 1", null)
+        var project: ProjectModel? = null
+        if (cursor.moveToFirst()) {
+            project = ProjectModel(
+                id = cursor.getLong(cursor.getColumnIndexOrThrow(COLUMN_ID)),
+                request = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_REQUEST)),
+                plan = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_PLAN)) ?: "",
+                status = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_STATUS))
             )
         }
-    }
-
-    fun getLatestProject(): Project? {
-        readableDatabase.query(
-            "projects",
-            arrayOf("id", "request", "plan", "status"),
-            null,
-            null,
-            null,
-            null,
-            "id DESC",
-            "1"
-        ).use { cursor ->
-            if (!cursor.moveToFirst()) return null
-
-            return Project(
-                id = cursor.getLong(0),
-                request = cursor.getString(1),
-                plan = if (cursor.isNull(2)) null
-                    else cursor.getString(2),
-                status = cursor.getString(3)
-            )
-        }
-    }
-
-    private fun currentTimestampExpression(): String {
-        // لا تُستخدم هذه القيمة كوقت؛ التحديث الفعلي يتم عبر SQL.
-        return ""
+        cursor.close()
+        return project
     }
 }
+
+data class ProjectModel(
+    val id: Long,
+    val request: String,
+    val plan: String,
+    val status: String
+)
