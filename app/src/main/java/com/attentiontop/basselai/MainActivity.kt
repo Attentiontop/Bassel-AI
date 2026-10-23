@@ -201,20 +201,34 @@ class MainActivity : Activity() {
         layoutParams = matchWidth()
     }
 
+    // زر مستقل داخل التخطيط العمودي: يجب أن يكون عرضه ممتدًا، لا صفرًا.
     private fun button(text: String, action: () -> Unit) = Button(this).apply {
         this.text = text
         isAllCaps = false
         setTextColor(Color.WHITE)
         setBackgroundTintList(android.content.res.ColorStateList.valueOf(accent))
         setOnClickListener { action() }
-        layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(48)
+        ).apply {
             setMargins(dp(3), dp(4), dp(3), dp(4))
         }
     }
 
+    // أزرار الصف الأفقي تُقسم المساحة بالتساوي بدل عرض MATCH_PARENT.
     private fun rowButtons(a: Button, b: Button) {
+        val paramsA = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+            setMargins(dp(3), dp(4), dp(3), dp(4))
+        }
+        val paramsB = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+            setMargins(dp(3), dp(4), dp(3), dp(4))
+        }
+        a.layoutParams = paramsA
+        b.layoutParams = paramsB
         root.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            layoutParams = matchWidth()
             addView(a)
             addView(b)
         })
@@ -253,9 +267,16 @@ class MainActivity : Activity() {
             card.addView(label("${model.name} • ${model.provider} • ${model.role}", 14, foreground, true))
             card.addView(label("${model.modelId}\n${model.endpoint}", 11, muted))
             card.addView(label(modelStates[model.id] ?: "لم يُفحص", 12, accent))
-            val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            actions.addView(button("تعديل") { showModelEditor(model) })
-            actions.addView(button("حذف") {
+            val actions = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = matchWidth()
+            }
+            val editButton = button("تعديل") { showModelEditor(model) }
+            editButton.layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                setMargins(dp(3), dp(4), dp(3), dp(4))
+            }
+            actions.addView(editButton)
+            val deleteButton = button("حذف") {
                 AlertDialog.Builder(this).setTitle("حذف النموذج؟")
                     .setMessage("سيُحذف ${model.name} من السجل المحلي.")
                     .setNegativeButton("إلغاء", null)
@@ -264,7 +285,11 @@ class MainActivity : Activity() {
                         modelStates.remove(model.id)
                         saveModels(); refreshModels(); refreshLeaderSpinner()
                     }.show()
-            })
+            }
+            deleteButton.layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                setMargins(dp(3), dp(4), dp(3), dp(4))
+            }
+            actions.addView(deleteButton)
             card.addView(actions)
             modelList.addView(card)
         }
