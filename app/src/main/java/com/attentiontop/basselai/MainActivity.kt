@@ -22,7 +22,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        // تم تعليق السطر مؤقتاً لتجنب خطأ عدم وجود ملف الواجهة activity_main.xml
+        // setContentView(R.layout.activity_main)
 
         // تهيئة قاعدة البيانات المحلية
         db = AppDatabase.getDatabase(this)
