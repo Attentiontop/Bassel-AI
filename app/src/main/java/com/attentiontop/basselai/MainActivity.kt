@@ -1,7 +1,8 @@
 package com.attentiontop.basselai
 
-import android.os.Bundle
+graphics@import android.os.Bundle
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.CoroutineScope
@@ -19,27 +20,45 @@ import java.io.IOException
 class MainActivity : AppCompatActivity() {
 
     private val client = OkHttpClient()
-    private lateinit var db: AppDatabase
+    private var db: AppDatabase? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // الحل الهندسي الآمن: بناء واجهة النشاط برمجياً بالكامل لتجنب الاعتماد كلياً على ملفات XML مفقودة (R.layout)
-        // هذا يمنع خطأ "Unresolved reference 'layout'" نهائياً أثناء مرحلة Compile-time.
-        val rootLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
-            )
-        }
-        setContentView(rootLayout)
 
-        // تهيئة قاعدة البيانات المحلية بأمان
         try {
+            // 1. بناء واجهة آمنة برمجياً لتجنب مشاكل XML مفقودة
+            val rootLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.MATCH_PARENT
+                )
+                setPadding(32, 32, 32, 32)
+            }
+
+            val titleTextView = TextView(this).apply {
+                text = "Bassel AI - قيد التشغيل بنجاح"
+                textSize = 18f
+            }
+            rootLayout.addView(titleTextView)
+            setContentView(rootLayout)
+
+            // 2. تهيئة قاعدة البيانات المحلية بحماية كاملة
             db = AppDatabase.getDatabase(this)
-        } catch (e: Exception) {
+
+        } catch (e: Throwable) {
+            // التقاط أي خطأ فادح أثناء التشغيل وعرضه على الشاشة لمنع الإغلاق المفاجئ
             e.printStackTrace()
+            val errorLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(32, 32, 32, 32)
+            }
+            val errorTextView = TextView(this).apply {
+                text = "خطأ في التشغيل: ${e.localizedMessage}"
+                textSize = 14f
+            }
+            errorLayout.addView(errorTextView)
+            setContentView(errorLayout)
         }
     }
 
@@ -59,7 +78,6 @@ class MainActivity : AppCompatActivity() {
 
             when (provider) {
                 "Google Gemini" -> {
-                    // مسار v1beta المصحح لمنع خطأ 404 نهائياً
                     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
                     val partObj = JSONObject().put("text", prompt)
                     val partsArray = JSONArray().put(partObj)
