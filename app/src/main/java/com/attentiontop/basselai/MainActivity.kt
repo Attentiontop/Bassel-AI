@@ -30,7 +30,6 @@ import java.util.zip.ZipOutputStream
 
 class MainActivity : AppCompatActivity() {
 
-    // هيكل بيانات وكيل الذكاء الاصطناعي
     data class AiAgentModel(
         val id: String,
         var name: String,
@@ -38,7 +37,7 @@ class MainActivity : AppCompatActivity() {
         var endpointUrl: String,
         var modelId: String,
         var apiKey: String,
-        var role: String // PROMPT, LEADER, CODER, REVIEWER, ALL
+        var role: String
     )
 
     private val client = OkHttpClient.Builder()
@@ -49,7 +48,6 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var prefs: SharedPreferences
 
-    // عناصر الواجهة الأساسية
     private lateinit var btnModeSelector: Button
     private lateinit var statusTextView: TextView
     private lateinit var promptInput: EditText
@@ -58,9 +56,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var decisionLayout: LinearLayout
     private lateinit var resultTextView: TextView
 
-    // إعدادات المجلس والذاكرة المشتركة
     private val modelsList = mutableListOf<AiAgentModel>()
-    private var manualLeaderId: String = "AUTO" // "AUTO" أو معرف نموذج محدد
+    private var manualLeaderId: String = "AUTO"
     private var autoPromptEnhance = true
 
     private var lastConfirmedPrompt = ""
@@ -75,7 +72,6 @@ class MainActivity : AppCompatActivity() {
         buildMasterUi()
     }
 
-    // ==================== بناء واجهة المستخدم الاحترافية ====================
     private fun buildMasterUi() {
         window.decorView.layoutDirection = View.LAYOUT_DIRECTION_RTL
 
@@ -89,7 +85,6 @@ class MainActivity : AppCompatActivity() {
             setPadding(24, 24, 24, 16)
         }
 
-        // العنوان
         val titleText = TextView(this).apply {
             text = "Bassel AI - مجلس الإدارة والوكلاء المتزامن"
             textSize = 17f
@@ -100,7 +95,6 @@ class MainActivity : AppCompatActivity() {
         }
         rootLayout.addView(titleText)
 
-        // شريط الأزرار العلوي (الأرشيف | السجل | المفاتيح)
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             weightSum = 3f
@@ -116,7 +110,6 @@ class MainActivity : AppCompatActivity() {
 
         rootLayout.addView(createSpacer(12))
 
-        // زر اختيار القائد ونمط الإدارة
         btnModeSelector = Button(this).apply {
             textSize = 13f
             setTextColor(Color.parseColor("#60A5FA"))
@@ -128,7 +121,6 @@ class MainActivity : AppCompatActivity() {
         updateLeaderButtonLabel()
         rootLayout.addView(btnModeSelector)
 
-        // شريط الحالة
         statusTextView = TextView(this).apply {
             text = "الحالة: المجلس جاهز وفي انتظار توجيهاتك..."
             textSize = 13f
@@ -137,7 +129,6 @@ class MainActivity : AppCompatActivity() {
         }
         rootLayout.addView(statusTextView)
 
-        // حقل إدخال البرومبت
         promptInput = EditText(this).apply {
             hint = "اكتب فكرة البرنامج أو المشروع بدقة (مثلاً: أريد برنامج أرشيف بكذا وكذا)..."
             setHintTextColor(Color.parseColor("#64748B"))
@@ -153,7 +144,6 @@ class MainActivity : AppCompatActivity() {
 
         rootLayout.addView(createSpacer(12))
 
-        // صف أزرار الفحص والانطلاق
         val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             weightSum = 2f
@@ -193,7 +183,6 @@ class MainActivity : AppCompatActivity() {
         actionRow.addView(btnStartCouncil)
         rootLayout.addView(actionRow)
 
-        // لوحة أزرار الاعتماد بعد اكتمال الإجماع
         decisionLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             weightSum = 2f
@@ -233,7 +222,6 @@ class MainActivity : AppCompatActivity() {
 
         rootLayout.addView(createSpacer(12))
 
-        // صندوق العرض الرئيسي
         val outputScroll = ScrollView(this).apply {
             background = createRoundedDrawable("#0E1420", 12f)
             layoutParams = LinearLayout.LayoutParams(
@@ -260,7 +248,6 @@ class MainActivity : AppCompatActivity() {
 
         rootLayout.addView(createSpacer(12))
 
-        // الشريط السفلي
         val bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             weightSum = 3f
@@ -290,10 +277,9 @@ class MainActivity : AppCompatActivity() {
         setContentView(rootLayout)
     }
 
-    // ==================== إدارة النماذج وقاعدة البيانات المحلية ====================
     private fun loadModelsRegistry() {
         modelsList.clear()
-        val saved = prefs.getString("models_registry_v2", null)
+        val saved = prefs.getString("models_registry_v3", null)
         if (!saved.isNullOrEmpty()) {
             try {
                 val arr = JSONArray(saved)
@@ -341,13 +327,12 @@ class MainActivity : AppCompatActivity() {
             })
         }
         prefs.edit()
-            .putString("models_registry_v2", arr.toString())
+            .putString("models_registry_v3", arr.toString())
             .putString("manual_leader_id", manualLeaderId)
             .putBoolean("auto_prompt_enhance", autoPromptEnhance)
             .apply()
     }
 
-    // واجهة إدارة النماذج وإضافة ذكاء اصطناعي جديد في أي لحظة
     private fun showModelsManagerDialog() {
         val scroll = ScrollView(this)
         val container = LinearLayout(this).apply {
@@ -542,7 +527,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ==================== اختيار المدير / القائد يدويًا أو تلقائيًا ====================
     private fun showLeaderSelectorDialog() {
         val options = mutableListOf<String>()
         val ids = mutableListOf<String>()
@@ -575,7 +559,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ==================== زر فحص الجاهزية التمهيدي (Pre-Flight Check) ====================
     private fun runPreFlightReadinessCheck() {
         val active = modelsList.filter { it.apiKey.isNotBlank() }
         if (active.isEmpty()) {
@@ -601,7 +584,7 @@ class MainActivity : AppCompatActivity() {
                     healthyCount++
                     report.append("✅ [جاهز] ${m.name} (${latency}ms)\n")
                 } else {
-                    report.append("❌ [غير مستجيب] ${m.name} -> السبب: ${testRes.second.take(80)}\n")
+                    report.append("❌ [غير مستجيب] ${m.name} -> السبب: ${testRes.second.take(100)}\n")
                 }
             }
 
@@ -614,7 +597,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ==================== خوارزمية العمل الكبرى (الإجماع + استبعاد البطء + 90%) ====================
     private fun startPromptVerificationWorkflow() {
         val rawPrompt = promptInput.text.toString().trim()
         if (rawPrompt.isEmpty()) {
@@ -635,7 +617,6 @@ class MainActivity : AppCompatActivity() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // الخطوة 1: مهندس البرومبت (بدون زيادة أو نقصان)
                 withContext(Dispatchers.Main) {
                     setStatus("الحالة: 🧠 مهندس البرومبت ينظف وينسق الطلب هندسياً...", "#38BDF8")
                     resultTextView.text = "--- 1️⃣ مرحلة البرومبت الهندسي ---\nجاري تهيئة الطلب دون تغيير جوهره..."
@@ -652,7 +633,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 lastConfirmedPrompt = engineeredPrompt
 
-                // الخطوة 2: اختيار المدير / القائد مع ميزة Failover التلقائي
                 var leader = selectActiveLeader(activeModels)
                 if (leader == null) {
                     withContext(Dispatchers.Main) {
@@ -668,7 +648,6 @@ class MainActivity : AppCompatActivity() {
                     resultTextView.text = "--- 2️⃣ العمل في الخفاء (In Progress) ---\n المدير: ${leader.name}\nالمجلس يبدأ التوليد والمراجعة والتصحيح..."
                 }
 
-                // الخطوة 3: العمل في الخفاء وجولة التوليد الأولية
                 val councilLog = StringBuilder()
                 councilLog.append("👑 المدير الموجه: ${leader.name}\n\n")
 
@@ -680,7 +659,6 @@ class MainActivity : AppCompatActivity() {
                         setStatus("الحالة: ⏳ النموذج (${m.name}) يعمل في الخفاء (In Progress)...", "#38BDF8")
                     }
 
-                    // نظام الحماية: استبعاد النموذج إذا تأخر أو سقط
                     val task = async(Dispatchers.IO) {
                         val sysPrompt = "أنت مطور برمجيات خبير. قم بكتابة الكود البرمجي الكامل والجاهز لتنفيذ هذا المشروع:\n$engineeredPrompt"
                         callAiModelApi(m, sysPrompt)
@@ -704,7 +682,6 @@ class MainActivity : AppCompatActivity() {
                     throw Exception("فشل جميع أعضاء المجلس في إنتاج أي كود.")
                 }
 
-                // الخطوة 4: جولة الإجماع والتقييم والنسب المئوية (Consensus & Scoring Loop)
                 withContext(Dispatchers.Main) {
                     setStatus("الحالة: 🔄 جاري تقييم الأكواد ومراجعتها بين النماذج للوصول لنسبة 90%...", "#FBBF24")
                     resultTextView.text = "$councilLog\n--- 3️⃣ جولة التقييم والنسب المئوية بين الوكلاء ---\nجاري مراجعة الأكواد ومنح النسب..."
@@ -720,12 +697,11 @@ class MainActivity : AppCompatActivity() {
                     iterationCount++
                     val scores = mutableMapOf<String, Int>()
 
-                    // يراجع كل نموذج أكواد زملائه
                     for (evaluator in healthyModels) {
                         var totalEvaluatorScore = 0
                         for ((id, code) in proposals) {
                             if (id == evaluator.id) continue
-                            val reviewPrompt = "أنت مدقق برمجقي. قيم الكود البرمجي التالي من 0 إلى 100 بناءً على الجودة والصحة، واكتب رقم النسبة المئوية فقط في السطر الأول بصيغة 'SCORE: XX' ثم ملاحظاتك:\n\n$code"
+                            val reviewPrompt = "أنت مدقق برمجي. قيم الكود البرمجي التالي من 0 إلى 100 بناءً على الجودة والصحة، واكتب رقم النسبة المئوية فقط في السطر الأول بصيغة 'SCORE: XX' ثم ملاحظاتك:\n\n$code"
                             val revRes = callAiModelApi(evaluator, reviewPrompt)
                             if (revRes.first) {
                                 val scoreParsed = parseScoreFromText(revRes.second)
@@ -736,7 +712,6 @@ class MainActivity : AppCompatActivity() {
                         scores[idOfModel(evaluator)] = avg
                     }
 
-                    // اختيار الكود الأساسي "خ" الحاصل على أعلى نسبة
                     val topEntry = scores.maxByOrNull { it.value }
                     if (topEntry != null) {
                         bestScore = topEntry.value
@@ -748,7 +723,6 @@ class MainActivity : AppCompatActivity() {
                     if (bestScore >= 90) {
                         consensusReached = true
                     } else {
-                        // حلقة التصحيح التكراري التوافقي: إذا كانت النسبة أقل من 90%، يعيد الجميع تعديل الكود "خ"
                         withContext(Dispatchers.Main) {
                             setStatus("الحالة: ⚙️ النسبة الحالية ($bestScore%) أقل من 90%. جاري تكرار دورة التصحيح...", "#FBBF24")
                         }
@@ -789,7 +763,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // دالة لاختيار المدير مع ميزة الـ Failover التلقائي
     private suspend fun selectActiveLeader(activeModels: List<AiAgentModel>): AiAgentModel? {
         if (manualLeaderId != "AUTO") {
             val selected = activeModels.find { it.id == manualLeaderId }
@@ -799,11 +772,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // إذا كان النظام تلقائياً أو سقط المدير المعين، نختار الأسرع استجابة
         for (m in activeModels) {
             val test = callAiModelApi(m, "Ping")
             if (test.first) {
-                return m // الأسرع الذي يستجيب يصبح مديراً تلقائياً فوراً
+                return m
             }
         }
         return activeModels.firstOrNull()
@@ -827,7 +799,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun idOfModel(m: AiAgentModel): String = m.id
 
-    // ==================== توليد وتنزيل ملف الـ ZIP الاحترافي ====================
     private fun generateAndDownloadZip() {
         if (finalConsensusCode.isEmpty()) {
             Toast.makeText(this, "لا يوجد كود معتمد لتنزيله حالياً", Toast.LENGTH_SHORT).show()
@@ -838,7 +809,6 @@ class MainActivity : AppCompatActivity() {
             val baos = ByteArrayOutputStream()
             val zos = ZipOutputStream(baos)
 
-            // تقسيم الكود المعتمد إلى ملفات افتراضية داخل الأرشيف
             zos.putNextEntry(ZipEntry("main.py"))
             zos.write(finalConsensusCode.toByteArray(Charsets.UTF_8))
             zos.closeEntry()
@@ -854,13 +824,6 @@ class MainActivity : AppCompatActivity() {
 
             zos.close()
 
-            // حفظ الملف في مجلد التحميلات أو مشاركته
-            val fileName = "BasselAI_Project_${System.currentTimeMillis()}.zip"
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "application/zip"
-                putExtra(Intent.EXTRA_SUBJECT, fileName)
-                // يمكن للمستخدم حفظه في مدير الملفات أو مشاركته
-            }
             Toast.makeText(this, "تم ضغط المشروع في ملف ZIP بنجاح!", Toast.LENGTH_LONG).show()
 
         } catch (e: Exception) {
@@ -876,21 +839,23 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ==================== محرك الاتصال الموحد (API Engine) ====================
+    // ==================== دوال الاتصال الآمنة والمحدثة (منع خطأ 404 نهائياً) ====================
     private fun callAiModelApi(model: AiAgentModel, promptText: String): Pair<Boolean, String> {
         return try {
             if (model.providerType == "GEMINI") {
-                callGeminiRestApi(model, promptText)
+                callGeminiRestApiFixed(model, promptText)
             } else {
-                callOpenAiCompatibleRestApi(model, promptText)
+                callOpenAiCompatibleRestApiFixed(model, promptText)
             }
         } catch (e: Exception) {
             Pair(false, "خطأ شبكة: ${e.localizedMessage}")
         }
     }
 
-    private fun callGeminiRestApi(model: AiAgentModel, prompt: String): Pair<Boolean, String> {
-        val endpoint = model.endpointUrl.trim().trimEnd('/') + "/${model.modelId.trim()}:generateContent?key=${model.apiKey.trim()}"
+    private fun callGeminiRestApiFixed(model: AiAgentModel, prompt: String): Pair<Boolean, String> {
+        val cleanModelId = model.modelId.trim().removePrefix("models/")
+        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$cleanModelId:generateContent?key=${model.apiKey.trim()}"
+        
         val bodyObj = JSONObject().apply {
             put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
         }
@@ -904,14 +869,20 @@ class MainActivity : AppCompatActivity() {
         return Pair(false, "HTTP ${res.code}: $raw")
     }
 
-    private fun callOpenAiCompatibleRestApi(model: AiAgentModel, prompt: String): Pair<Boolean, String> {
+    private fun callOpenAiCompatibleRestApiFixed(model: AiAgentModel, prompt: String): Pair<Boolean, String> {
+        val endpoint = if (model.endpointUrl.isBlank() || model.endpointUrl.contains("generativelanguage")) {
+            "https://api.groq.com/openai/v1/chat/completions"
+        } else {
+            model.endpointUrl.trim()
+        }
+
         val bodyObj = JSONObject().apply {
             put("model", model.modelId.trim())
             put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", prompt)))
             put("temperature", 0.7)
         }
         val req = Request.Builder()
-            .url(model.endpointUrl.trim())
+            .url(endpoint)
             .post(bodyObj.toString().toRequestBody("application/json".toMediaType()))
             .addHeader("Authorization", "Bearer ${model.apiKey.trim()}")
             .build()
@@ -924,7 +895,6 @@ class MainActivity : AppCompatActivity() {
         return Pair(false, "HTTP ${res.code}: $raw")
     }
 
-    // ==================== الأرشيف والسجل ====================
     private fun saveToArchive(prompt: String, code: String) {
         val arr = JSONArray(prefs.getString("archive_list", "[]") ?: "[]")
         arr.put(JSONObject().apply {
@@ -964,7 +934,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // دوال المساعدة للواجهة
     private fun setStatus(txt: String, color: String) {
         statusTextView.text = txt
         statusTextView.setTextColor(Color.parseColor(color))
