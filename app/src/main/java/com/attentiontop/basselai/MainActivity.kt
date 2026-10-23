@@ -1,14 +1,22 @@
 package com.attentiontop.basselai
 
+import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -28,14 +36,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
 
         dbHelper = AppDatabase(this)
 
-        inputRequest = findViewById(R.id.inputRequest)
-        btnAnalyze = findViewById(R.id.btnAnalyze)
-        txtResult = findViewById(R.id.txtResult)
-        txtStatus = findViewById(R.id.txtStatus)
+        // بناء الواجهة برمجياً بالكامل لتجنب أي مشاكل في ملفات الـ XML
+        setupProgrammaticUI()
 
         restoreLatestProject()
 
@@ -53,6 +58,85 @@ class MainActivity : AppCompatActivity() {
 
             startOrchestratorWorkflow(prompt)
         }
+    }
+
+    private fun setupProgrammaticUI() {
+        val density = resources.displayMetrics.density
+        fun dp(value: Int): Int = (value * density).toInt()
+
+        val rootLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            setBackgroundColor(Color.parseColor("#121212"))
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        val titleView = TextView(this).apply {
+            text = "Bassel AI - الأرشيف والمنسق الذكي"
+            textSize = 20f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(12))
+        }
+
+        txtStatus = TextView(this).apply {
+            text = "الحالة: جاهز"
+            textSize = 14f
+            setTextColor(Color.parseColor("#03DAC5"))
+            setPadding(0, 0, 0, dp(8))
+        }
+
+        inputRequest = EditText(this).apply {
+            hint = "اكتب طلبك أو فكرتك هنا..."
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#AAAAAA"))
+            minHeight = dp(48)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+
+        btnAnalyze = Button(this).apply {
+            text = "تحليل وتنفيذ عبر Bassel AI"
+            setBackgroundColor(Color.parseColor("#6200EE"))
+            setTextColor(Color.WHITE)
+            val params = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            params.topMargin = dp(8)
+            layoutParams = params
+        }
+
+        val scrollView = ScrollView(this).apply {
+            val params = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+            params.topMargin = dp(12)
+            layoutParams = params
+        }
+
+        txtResult = TextView(this).apply {
+            text = "ستظهر نتائج التحليل وخطط العمل هنا..."
+            setTextColor(Color.parseColor("#E0E0E0"))
+            textSize = 14f
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+
+        scrollView.addView(txtResult)
+
+        rootLayout.addView(titleView)
+        rootLayout.addView(txtStatus)
+        rootLayout.addView(inputRequest)
+        rootLayout.addView(btnAnalyze)
+        rootLayout.addView(scrollView)
+
+        setContentView(rootLayout)
     }
 
     private fun restoreLatestProject() {
@@ -95,7 +179,6 @@ class MainActivity : AppCompatActivity() {
             var usedProvider = "gemini"
             var errorMsg = ""
 
-            // 1. المحاولة الأولى عبر Gemini API
             val geminiKey = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
             if (geminiKey.isNotEmpty() && geminiKey != "YOUR_GEMINI_API_KEY") {
                 try {
@@ -107,7 +190,6 @@ class MainActivity : AppCompatActivity() {
                 errorMsg = "مفتاح Gemini غير متوفر"
             }
 
-            // 2. التوجيه التلقائي البديل (Fallback) إلى Groq إذا فشل Gemini
             if (planOutput == null) {
                 usedProvider = "groq"
                 val groqKey = try { BuildConfig.GROQ_API_KEY } catch (e: Exception) { "" }
@@ -154,9 +236,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         val jsonBody = JSONObject().apply {
-            put("contents", org.json.JSONArray().apply {
+            put("contents", JSONArray().apply {
                 put(JSONObject().apply {
-                    put("parts", org.json.JSONArray().apply {
+                    put("parts", JSONArray().apply {
                         put(JSONObject().put("text", "بصفتك المنسق الرئيسي لنظام Bassel AI، قم بتحليل الطلب التالي وضع خطة عمل مفصلة وواضحة: $prompt"))
                     })
                 })
@@ -193,7 +275,7 @@ class MainActivity : AppCompatActivity() {
 
         val jsonBody = JSONObject().apply {
             put("model", "llama3-8b-8192")
-            put("messages", org.json.JSONArray().apply {
+            put("messages", JSONArray().apply {
                 put(JSONObject().apply {
                     put("role", "user")
                     put("content", "بصفتك محرك التنفيذ المساعد لنظام Bassel AI، حلل الطلب التالي واقترح خطوات دقيقة: $prompt")
