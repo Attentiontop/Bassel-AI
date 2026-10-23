@@ -1,5 +1,6 @@
 package com.attentiontop.basselai
 
+import android.app.Activity
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -11,9 +12,10 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -23,7 +25,7 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() {
 
     private lateinit var dbHelper: AppDatabase
     private lateinit var inputRequest: EditText
@@ -34,15 +36,21 @@ class MainActivity : AppCompatActivity() {
     private var currentProjectId: Long = -1L
     private var isNetworkCallInProgress: Boolean = false
 
+    // نطاق مستقل لإدارة العمليات الخلفية بأمان تام دون الحاجة لمكتبات خارجية معقدة
+    private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        dbHelper = AppDatabase(this)
-
-        // بناء الواجهة برمجياً بالكامل لتجنب أي مشاكل في ملفات الـ XML
+        // بناء الواجهة أولاً لضمان فتح الشاشة فوراً
         setupProgrammaticUI()
 
-        restoreLatestProject()
+        try {
+            dbHelper = AppDatabase(this)
+            restoreLatestProject()
+        } catch (e: Exception) {
+            txtStatus.text = "تنبيه في قاعدة البيانات: ${e.message}"
+        }
 
         btnAnalyze.setOnClickListener {
             val prompt = inputRequest.text.toString().trim()
@@ -58,6 +66,11 @@ class MainActivity : AppCompatActivity() {
 
             startOrchestratorWorkflow(prompt)
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        mainScope.cancel() // إيقاف أي عمليات معلقة عند إغلاق التطبيق
     }
 
     private fun setupProgrammaticUI() {
@@ -81,7 +94,7 @@ class MainActivity : AppCompatActivity() {
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(12))
+            setPadding(0, dp(8), 0, dp(16))
         }
 
         txtStatus = TextView(this).apply {
@@ -95,8 +108,9 @@ class MainActivity : AppCompatActivity() {
             hint = "اكتب طلبك أو فكرتك هنا..."
             setTextColor(Color.WHITE)
             setHintTextColor(Color.parseColor("#AAAAAA"))
-            minHeight = dp(48)
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setBackgroundColor(Color.parseColor("#1E1E1E"))
+            minHeight = dp(52)
+            setPadding(dp(12), dp(12), dp(12), dp(12))
         }
 
         btnAnalyze = Button(this).apply {
@@ -107,7 +121,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            params.topMargin = dp(8)
+            params.topMargin = dp(12)
             layoutParams = params
         }
 
@@ -117,15 +131,16 @@ class MainActivity : AppCompatActivity() {
                 0,
                 1f
             )
-            params.topMargin = dp(12)
+            params.topMargin = dp(16)
             layoutParams = params
         }
 
         txtResult = TextView(this).apply {
             text = "ستظهر نتائج التحليل وخطط العمل هنا..."
             setTextColor(Color.parseColor("#E0E0E0"))
-            textSize = 14f
+            textSize = 15f
             setPadding(dp(8), dp(8), dp(8), dp(8))
+            setTextIsSelectable(true) // يسمح لك بنسخ النص الناتج بسهولة من الهاتف
         }
 
         scrollView.addView(txtResult)
@@ -140,40 +155,42 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun restoreLatestProject() {
-        try {
-            val project = dbHelper.getLatestProject()
-            if (project != null) {
-                currentProjectId = project.id
-                when (project.status) {
-                    AppDatabase.STATUS_ANALYSIS -> {
-                        txtStatus.text = "الحالة: جاري التحليل..."
-                    }
-                    AppDatabase.STATUS_WAITING_FOR_APPROVAL -> {
-                        txtResult.text = "استعادة المشروع (ID: ${project.id}):\n\n${project.plan}\n\n[الخطة تنتظر موافقتك الآن]"
-                        txtStatus.text = "الحالة: بانتظار الموافقة"
-                    }
-                    AppDatabase.STATUS_APPROVED -> {
-                        txtResult.text = "المشروع (ID: ${project.id}) مُعتمد وجاهز للتنفيذ/التصدير."
-                        txtStatus.text = "الحالة: معتمد"
-                    }
-                    else -> {
-                        txtStatus.text = "الحالة: ${project.status}"
-                    }
+        val project = dbHelper.getLatestProject()
+        if (project != null) {
+            currentProjectId = project.id
+            when (project.status) {
+                AppDatabase.STATUS_ANALYSIS -> {
+                    txtStatus.text = "الحالة: جاري التحليل..."
+                }
+                AppDatabase.STATUS_WAITING_FOR_APPROVAL -> {
+                    txtResult.text = "استعادة المشروع (ID: ${project.id}):\n\n${project.plan}\n\n[الخطة تنتظر موافقتك الآن]"
+                    txtStatus.text = "الحالة: بانتظار الموافقة"
+                }
+                AppDatabase.STATUS_APPROVED -> {
+                    txtResult.text = "المشروع (ID: ${project.id}) مُعتمد وجاهز للتنفيذ."
+                    txtStatus.text = "الحالة: معتمد"
+                }
+                else -> {
+                    txtStatus.text = "الحالة: ${project.status}"
                 }
             }
-        } catch (e: Exception) {
-            txtStatus.text = "الحالة: جاهز"
         }
     }
 
     private fun startOrchestratorWorkflow(prompt: String) {
         isNetworkCallInProgress = true
-        currentProjectId = dbHelper.createProject(prompt)
+        try {
+            currentProjectId = dbHelper.createProject(prompt)
+        } catch (e: Exception) {
+            txtResult.text = "خطأ في حفظ المشروع محلياً: ${e.message}"
+            isNetworkCallInProgress = false
+            return
+        }
 
         txtStatus.text = "الحالة: جاري التحليل وتوجيه المهام..."
         txtResult.text = "الطلب: $prompt\n\n[جاري العمل خلف الكواليس عبر النماذج الذكية...]"
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        mainScope.launch(Dispatchers.IO) {
             val startTime = System.currentTimeMillis()
             var planOutput: String? = null
             var usedProvider = "gemini"
@@ -209,14 +226,18 @@ class MainActivity : AppCompatActivity() {
             withContext(Dispatchers.Main) {
                 isNetworkCallInProgress = false
                 if (planOutput != null) {
-                    dbHelper.logAttempt(currentProjectId, usedProvider, "planner", planOutput, "", duration)
-                    dbHelper.savePlanAndWaitApproval(currentProjectId, planOutput)
+                    try {
+                        dbHelper.logAttempt(currentProjectId, usedProvider, "planner", planOutput, "", duration)
+                        dbHelper.savePlanAndWaitApproval(currentProjectId, planOutput)
+                    } catch (_: Exception) {}
 
                     txtResult.text = "--- خطة العمل المقترحة (عبر $usedProvider) ---\n\n$planOutput"
                     txtStatus.text = "الحالة: بانتظار الموافقة"
                 } else {
-                    dbHelper.logAttempt(currentProjectId, usedProvider, "planner", "", errorMsg, duration)
-                    dbHelper.updateProjectStatus(currentProjectId, AppDatabase.STATUS_FAILED)
+                    try {
+                        dbHelper.logAttempt(currentProjectId, usedProvider, "planner", "", errorMsg, duration)
+                        dbHelper.updateProjectStatus(currentProjectId, AppDatabase.STATUS_FAILED)
+                    } catch (_: Exception) {}
 
                     txtResult.text = "فشلت عملية المعالجة عبر جميع المحركات.\nالسبب: $errorMsg"
                     txtStatus.text = "الحالة: فشل التحليل"
@@ -248,7 +269,8 @@ class MainActivity : AppCompatActivity() {
         connection.outputStream.use { it.write(jsonBody.toString().toByteArray(Charsets.UTF_8)) }
 
         if (connection.responseCode != 200) {
-            throw RuntimeException("HTTP Error Code: ${connection.responseCode}")
+            val err = connection.errorStream?.use { BufferedReader(InputStreamReader(it)).readText() } ?: ""
+            throw RuntimeException("HTTP ${connection.responseCode}: $err")
         }
 
         val responseString = connection.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
@@ -286,7 +308,8 @@ class MainActivity : AppCompatActivity() {
         connection.outputStream.use { it.write(jsonBody.toString().toByteArray(Charsets.UTF_8)) }
 
         if (connection.responseCode != 200) {
-            throw RuntimeException("Groq HTTP Error: ${connection.responseCode}")
+            val err = connection.errorStream?.use { BufferedReader(InputStreamReader(it)).readText() } ?: ""
+            throw RuntimeException("Groq HTTP ${connection.responseCode}: $err")
         }
 
         val responseString = connection.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
