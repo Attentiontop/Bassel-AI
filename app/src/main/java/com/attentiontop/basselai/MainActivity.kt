@@ -63,7 +63,6 @@ class MainActivity : Activity() {
         mainScope.cancel()
     }
 
-    // --- نظام إدارة المفاتيح الحي (يدعم التعديل من شاشة التطبيق مباشرة) ---
     private fun getPrefs() = getSharedPreferences("bassel_prefs", Context.MODE_PRIVATE)
 
     private fun getActiveGeminiKey(): String {
@@ -78,14 +77,6 @@ class MainActivity : Activity() {
         if (saved.isNotEmpty()) return saved
         val buildKey = try { BuildConfig.GROQ_API_KEY.trim() } catch (_: Exception) { "" }
         return if (buildKey != "YOUR_GROQ_API_KEY" && buildKey != "null") buildKey else ""
-    }
-
-    private fun getActiveOpenRouterKey(): String {
-        return getPrefs().getString("openrouter_key", "")?.trim() ?: ""
-    }
-
-    private fun getActiveCerebrasKey(): String {
-        return getPrefs().getString("cerebras_key", "")?.trim() ?: ""
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
@@ -153,7 +144,7 @@ class MainActivity : Activity() {
         }
 
         btnAnalyze = Button(this).apply {
-            text = "🚀 المرحلة 1: التخطيط الهندسي (Planner)"
+            text = "🚀 المرحلة 1: التخطيط الهندسي (PLANNER)"
             setBackgroundColor(Color.parseColor("#6200EE"))
             setTextColor(Color.WHITE)
             setTypeface(null, Typeface.BOLD)
@@ -185,7 +176,7 @@ class MainActivity : Activity() {
         }
 
         btnApprove = Button(this).apply {
-            text = "✅ اعتماد وتنفيذ الكود (Executor)"
+            text = "✅ اعتماد وتنفيذ الكود"
             setBackgroundColor(Color.parseColor("#2E7D32"))
             setTextColor(Color.WHITE)
             setTypeface(null, Typeface.BOLD)
@@ -196,7 +187,7 @@ class MainActivity : Activity() {
         }
 
         btnReject = Button(this).apply {
-            text = "❌ رفض وتعديل"
+            text = "❌ رفض"
             setBackgroundColor(Color.parseColor("#C62828"))
             setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.7f).apply {
@@ -218,7 +209,7 @@ class MainActivity : Activity() {
         }
 
         txtResult = TextView(this).apply {
-            text = "أهلاً بك في نظام Bassel AI متعدد الوكلاء.\n\n1. أدخل فكرتك في الأعلى.\n2. سيقوم وكيل التخطيط (Planner) بصياغة الخطة.\n3. بعد اعتمادك، سيقوم وكيل التنفيذ (Executor) بكتابة الأكواد كاملة."
+            text = "أهلاً بك في نظام Bassel AI متعدد الوكلاء.\n\n1. اضغط على (⚙️ إعدادات المفاتيح) لتأكيد مفاتيح Gemini و Groq.\n2. اكتب فكرتك في الأعلى واضغط تخطيط."
             setTextColor(Color.parseColor("#E0E0E0"))
             textSize = 14f
             setPadding(dp(12), dp(12), dp(12), dp(12))
@@ -279,23 +270,18 @@ class MainActivity : Activity() {
 
         when (project.status) {
             AppDatabase.STATUS_WAITING_FOR_APPROVAL -> {
-                txtStatus.text = "الحالة: ⏳ مشروع #${project.id} بانتظار موافقتك"
-                txtResult.text = "📋 [خطة العمل المقترحة للمشروع #${project.id}]:\n\n${project.plan}\n\n-------------------\nاضغط على (اعتماد وتنفيذ الكود) بالأسفل للبدء بالتنفيذ الفعلي."
+                txtStatus.text = "الحالة: ⏳ بانتظار موافقتك"
+                txtResult.text = "📋 [خطة العمل المقترحة للمشروع #${project.id}]:\n\n${project.plan}\n\n-------------------\nاضغط على (اعتماد وتنفيذ الكود) بالأسفل للبدء."
                 approvalLayout.visibility = View.VISIBLE
             }
             AppDatabase.STATUS_COMPLETED -> {
-                txtStatus.text = "الحالة: ✅ مشروع #${project.id} مكتمل"
-                txtResult.text = "🚀 [المخرجات التنفيذية والكود النهائي للمشروع #${project.id}]:\n\n${project.execution}\n\n===================\n📋 [الخطة المعتمدة]:\n${project.plan}"
-                approvalLayout.visibility = View.GONE
-            }
-            AppDatabase.STATUS_REJECTED -> {
-                txtStatus.text = "الحالة: ❌ تم رفض خطة المشروع #${project.id}"
-                txtResult.text = "تم رفض الخطة السابقة:\n\n${project.plan}"
+                txtStatus.text = "الحالة: ✅ اكتمل التنفيذ"
+                txtResult.text = "🚀 [المخرجات النهائية للمشروع #${project.id}]:\n\n${project.execution}\n\n===================\n📋 [الخطة]:\n${project.plan}"
                 approvalLayout.visibility = View.GONE
             }
             else -> {
                 txtStatus.text = "الحالة: مشروع #${project.id} (${project.status})"
-                txtResult.text = project.plan.ifEmpty { "لا توجد مخرجات محفوظة." }
+                txtResult.text = project.plan.ifEmpty { "لا توجد مخرجات." }
                 approvalLayout.visibility = View.GONE
             }
         }
@@ -313,14 +299,13 @@ class MainActivity : Activity() {
         inputRequest.setText("")
         approvalLayout.visibility = View.GONE
         txtStatus.text = "الحالة: جاهز لمشروع جديد"
-        txtResult.text = "أدخل فكرة مشروعك الجديد في الأعلى واضغط على زر التحليل."
+        txtResult.text = "أدخل فكرة مشروعك الجديد في الأعلى."
     }
 
-    // --- المرحلة 1: وكيل التخطيط والمعمارية (Planner) بذكاء التوجيه التلقائي ---
     private fun startPlanningWorkflow(prompt: String) {
-        if (getActiveGeminiKey().isEmpty() && getActiveGroqKey().isEmpty() && getActiveOpenRouterKey().isEmpty() && getActiveCerebrasKey().isEmpty()) {
-            txtStatus.text = "الحالة: ⚠️ مفاتيح النماذج غير متوفرة"
-            txtResult.text = "الرجاء الضغط على زر (⚙️ إعدادات المفاتيح) في أعلى الشاشة لإدخال مفتاح واحد على الأقل."
+        if (getActiveGeminiKey().isEmpty() && getActiveGroqKey().isEmpty()) {
+            txtStatus.text = "الحالة: ⚠️ المفاتيح غير موجودة"
+            txtResult.text = "الرجاء النقر على (⚙️ إعدادات المفاتيح) في الأعلى وإدخال مفتاح Gemini أو Groq."
             showApiKeysDialog()
             return
         }
@@ -329,30 +314,25 @@ class MainActivity : Activity() {
         approvalLayout.visibility = View.GONE
         currentProjectId = dbHelper.createProject(prompt)
 
-        txtStatus.text = "الحالة: 🧠 وكيل التخطيط (Planner) يحلل الطلب..."
-        txtResult.text = "الطلب: $prompt\n\n[جاري استدعاء أفضل محرك متاح للتخطيط والهيكلة...]"
+        txtStatus.text = "الحالة: 🧠 وكيل التخطيط يحلل الطلب..."
+        txtResult.text = "الطلب: $prompt\n\n[جاري إرسال الطلب للمحركات الذكية...]"
 
-        val systemInstruction = """
-            أنت كبير مهندسي البرمجيات والمنسق الرئيسي (Master Architect & Planner) في نظام Bassel AI.
-            مهمتك تحليل طلب المستخدم التالي ووضع خطة عمل هندسية واضحة ومقسمة إلى خطوات عملية (المعمارية، الملفات المطلوبة، خطوات التنفيذ).
-            الطلب: $prompt
-        """.trimIndent()
+        val systemInstruction = "أنت كبير مهندسي البرمجيات في Bassel AI. ضع خطة عمل هندسية واضحة للطلب التالي: $prompt"
 
         executeAiTaskWithFallback(role = "planner", promptText = systemInstruction) { success, output, provider, errorMsg ->
             if (success && output != null) {
                 dbHelper.savePlanAndWaitApproval(currentProjectId, output)
-                txtStatus.text = "الحالة: ⏳ الخطة جاهزة (عبر $provider) - بانتظار موافقتك"
-                txtResult.text = "📋 --- خطة العمل المقترحة (المحرك: $provider) ---\n\n$output\n\n-------------------\nهل تعتمد هذه الخطة للبدء بالتنفيذ الفعلي؟"
+                txtStatus.text = "الحالة: ⏳ الخطة جاهزة (عبر $provider)"
+                txtResult.text = "📋 --- خطة العمل (عبر $provider) ---\n\n$output\n\n-------------------\nاضغط على اعتماد لتنفيذ الكود."
                 approvalLayout.visibility = View.VISIBLE
             } else {
                 dbHelper.updateProjectStatus(currentProjectId, AppDatabase.STATUS_FAILED)
                 txtStatus.text = "الحالة: ❌ فشل في التخطيط"
-                txtResult.text = "تعذر إتمام التحليل.\nالسبب: $errorMsg"
+                txtResult.text = "تعذر إتمام التحليل.\nالسبب: $errorMsg\n\nتأكد من صحة مفاتيح الـ API في الإعدادات."
             }
         }
     }
 
-    // --- المرحلة 2: وكيل التنفيذ وكتابة الأكواد (Executor) ---
     private fun startExecutionWorkflow() {
         val project = dbHelper.getProjectById(currentProjectId) ?: return
         if (isNetworkCallInProgress) return
@@ -361,44 +341,32 @@ class MainActivity : Activity() {
         approvalLayout.visibility = View.GONE
         dbHelper.updateProjectStatus(currentProjectId, AppDatabase.STATUS_EXECUTING)
 
-        txtStatus.text = "الحالة: ⚙️ وكيل التنفيذ (Executor) يكتب الكود الكامل..."
-        txtResult.text = "تم اعتماد الخطة للمشروع #${project.id}!\n\n[جاري تحويل الخطة إلى كود برمجي تفصيلي جاهز للنسخ...]"
+        txtStatus.text = "الحالة: ⚙️ وكيل التنفيذ يكتب الكود البرمجي..."
+        txtResult.text = "[جاري تحويل الخطة إلى كود برمجي كامل...]"
 
-        val executionPrompt = """
-            أنت المهندس المنفذ (Senior Execution Agent) في نظام Bassel AI.
-            لقد وافق المستخدم على خطة العمل التالية. اكتب الأكواد البرمجية الكاملة والنظيفة الجاهزة للنسخ:
-            
-            الطلب الأساسي:
-            ${project.request}
-            
-            الخطة المعتمدة:
-            ${project.plan}
-        """.trimIndent()
+        val executionPrompt = "أنت المهندس المنفذ في Bassel AI. اكتب الأكواد البرمجية الكاملة للطلب: ${project.request} بناءً على الخطة: ${project.plan}"
 
         executeAiTaskWithFallback(role = "executor", promptText = executionPrompt) { success, output, provider, errorMsg ->
             if (success && output != null) {
                 dbHelper.saveExecutionAndComplete(currentProjectId, output)
                 txtStatus.text = "الحالة: ✅ اكتمل التنفيذ (عبر $provider)"
-                txtResult.text = "🚀 --- المخرجات والكود النهائي (المحرك: $provider) ---\n\n$output"
+                txtResult.text = "🚀 --- الكود النهائي (عبر $provider) ---\n\n$output"
             } else {
                 dbHelper.updateProjectStatus(currentProjectId, AppDatabase.STATUS_WAITING_FOR_APPROVAL)
                 approvalLayout.visibility = View.VISIBLE
-                txtStatus.text = "الحالة: ⚠️ تعذر التنفيذ، حاول مجدداً"
-                txtResult.text = "خطأ أثناء التنفيذ: $errorMsg\n\nالخطة لا تزال محفوظة، اضغط اعتماد للمحاولة."
+                txtStatus.text = "الحالة: ⚠️ خطأ في التنفيذ"
+                txtResult.text = "السبب: $errorMsg"
             }
         }
     }
 
     private fun rejectCurrentPlan() {
-        if (currentProjectId != -1L) {
-            dbHelper.updateProjectStatus(currentProjectId, AppDatabase.STATUS_REJECTED)
-        }
+        if (currentProjectId != -1L) dbHelper.updateProjectStatus(currentProjectId, AppDatabase.STATUS_REJECTED)
         approvalLayout.visibility = View.GONE
-        txtStatus.text = "الحالة: ❌ تم رفض الخطة. عدل طلبك وأعد المحاولة"
-        Toast.makeText(this, "تم رفض الخطة.", Toast.LENGTH_LONG).show()
+        txtStatus.text = "الحالة: ❌ تم رفض الخطة"
+        Toast.makeText(this, "تم رفض الخطة", Toast.LENGTH_SHORT).show()
     }
 
-    // --- التوجيه التلقائي الذكي بين جميع المحركات المتاحة (Fallback Chain) ---
     private fun executeAiTaskWithFallback(
         role: String,
         promptText: String,
@@ -406,8 +374,6 @@ class MainActivity : Activity() {
     ) {
         val geminiKey = getActiveGeminiKey()
         val groqKey = getActiveGroqKey()
-        val openRouterKey = getActiveOpenRouterKey()
-        val cerebrasKey = getActiveCerebrasKey()
 
         mainScope.launch(Dispatchers.IO) {
             val startTime = System.currentTimeMillis()
@@ -415,7 +381,7 @@ class MainActivity : Activity() {
             var usedProvider = ""
             var errorLog = ""
 
-            // 1. المحاولة الأولى عبر Gemini (ممتاز في التخطيط واللغة العربية)
+            // 1. محاولة Gemini أولاً
             if (output == null && geminiKey.isNotEmpty()) {
                 try {
                     usedProvider = "Gemini"
@@ -425,33 +391,13 @@ class MainActivity : Activity() {
                 }
             }
 
-            // 2. المحاولة الثانية عبر OpenRouter (عملاق النماذج المجانية مثل DeepSeek و Qwen)
-            if (output == null && openRouterKey.isNotEmpty()) {
-                try {
-                    usedProvider = "OpenRouter (DeepSeek/Qwen)"
-                    output = callOpenRouterApi(promptText, openRouterKey)
-                } catch (e: Exception) {
-                    errorLog += "OpenRouter: ${e.message}; "
-                }
-            }
-
-            // 3. المحاولة الثالثة عبر Groq (سرعة فائقة و Llama)
+            // 2. محاولة Groq بالنموذج المحدث المستقر
             if (output == null && groqKey.isNotEmpty()) {
                 try {
                     usedProvider = "Groq"
                     output = callGroqApi(promptText, groqKey)
                 } catch (e: Exception) {
                     errorLog += "Groq: ${e.message}; "
-                }
-            }
-
-            // 4. المحاولة الرابعة عبر Cerebras (بديل صاروخي سريع)
-            if (output == null && cerebrasKey.isNotEmpty()) {
-                try {
-                    usedProvider = "Cerebras"
-                    output = callCerebrasApi(promptText, cerebrasKey)
-                } catch (e: Exception) {
-                    errorLog += "Cerebras: ${e.message}; "
                 }
             }
 
@@ -462,12 +408,11 @@ class MainActivity : Activity() {
 
             withContext(Dispatchers.Main) {
                 isNetworkCallInProgress = false
-                onComplete(output != null, output, usedProvider, errorLog)
+                onComplete(output != null, output, usedProvider, errorLog.ifEmpty { "المفاتيح غير متوفرة" })
             }
         }
     }
 
-    // --- بروتوكولات الاتصال بالمحركات المختلفة ---
     private fun callGeminiApi(prompt: String, apiKey: String): String {
         val urlString = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
         val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
@@ -487,29 +432,11 @@ class MainActivity : Activity() {
         val res = connection.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
         return JSONObject(res).optJSONArray("candidates")?.optJSONObject(0)
             ?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)
-            ?.optString("text", "") ?: throw RuntimeException("Empty Gemini")
-    }
-
-    private fun callOpenRouterApi(prompt: String, apiKey: String): String {
-        val urlString = "https://openrouter.ai/api/v1/chat/completions"
-        val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Authorization", "Bearer $apiKey")
-            connectTimeout = 20000; readTimeout = 60000; doOutput = true
-        }
-        val jsonBody = JSONObject().apply {
-            put("model", "deepseek/deepseek-r1:free") // نموذج مجاني خارق عبر OpenRouter
-            put("messages", JSONArray().apply { put(JSONObject().put("role", "user").put("content", prompt)) })
-        }
-        connection.outputStream.use { it.write(jsonBody.toString().toByteArray(Charsets.UTF_8)) }
-        if (connection.responseCode != 200) throw RuntimeException("HTTP ${connection.responseCode}")
-        val res = connection.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
-        return JSONObject(res).optJSONArray("choices")?.optJSONObject(0)
-            ?.optJSONObject("message")?.optString("content", "") ?: throw RuntimeException("Empty OpenRouter")
+            ?.optString("text", "") ?: throw RuntimeException("Empty Gemini Response")
     }
 
     private fun callGroqApi(prompt: String, apiKey: String): String {
+        // استخدام نموذج llama-3.3-70b-versatile الأحدث والمستقر تماماً في Groq
         val urlString = "https://api.groq.com/openai/v1/chat/completions"
         val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -525,64 +452,53 @@ class MainActivity : Activity() {
         if (connection.responseCode != 200) throw RuntimeException("HTTP ${connection.responseCode}")
         val res = connection.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
         return JSONObject(res).optJSONArray("choices")?.optJSONObject(0)
-            ?.optJSONObject("message")?.optString("content", "") ?: throw RuntimeException("Empty Groq")
+            ?.optJSONObject("message")?.optString("content", "") ?: throw RuntimeException("Empty Groq Response")
     }
 
-    private fun callCerebrasApi(prompt: String, apiKey: String): String {
-        val urlString = "https://api.cerebras.ai/v1/chat/completions"
-        val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Authorization", "Bearer $apiKey")
-            connectTimeout = 15000; readTimeout = 45000; doOutput = true
-        }
-        val jsonBody = JSONObject().apply {
-            put("model", "llama3.1-70b")
-            put("messages", JSONArray().apply { put(JSONObject().put("role", "user").put("content", prompt)) })
-        }
-        connection.outputStream.use { it.write(jsonBody.toString().toByteArray(Charsets.UTF_8)) }
-        if (connection.responseCode != 200) throw RuntimeException("HTTP ${connection.responseCode}")
-        val res = connection.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
-        return JSONObject(res).optJSONArray("choices")?.optJSONObject(0)
-            ?.optJSONObject("message")?.optString("content", "") ?: throw RuntimeException("Empty Cerebras")
-    }
-
-    // --- واجهة إعدادات المفاتيح الحية من داخل التطبيق ---
     private fun showApiKeysDialog() {
         val prefs = getPrefs()
+        
+        // استخدام ScrollView داخل النافذة لكي لا تظهر الخانات مقصورة أبداً
+        val scrollView = ScrollView(this)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(16), dp(20), dp(8))
         }
 
-        val geminiInput = EditText(this).apply { hint = "مفتاح Gemini API Key"; setText(prefs.getString("gemini_key", "")) }
-        val groqInput = EditText(this).apply { hint = "مفتاح Groq API Key"; setText(prefs.getString("groq_key", "")) }
-        val openRouterInput = EditText(this).apply { hint = "مفتاح OpenRouter (لنماذج DeepSeek المجانية)"; setText(prefs.getString("openrouter_key", "")) }
-        val cerebrasInput = EditText(this).apply { hint = "مفتاح Cerebras API Key (اختياري)"; setText(prefs.getString("cerebras_key", "")) }
+        val geminiInput = EditText(this).apply { 
+            hint = "مفتاح Gemini API Key"
+            setText(prefs.getString("gemini_key", ""))
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+        }
+        val groqInput = EditText(this).apply { 
+            hint = "مفتاح Groq API Key"
+            setText(prefs.getString("groq_key", ""))
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+        }
 
         val infoText = TextView(this).apply {
-            text = "أدخل مفاتيحك المجانية هنا لتفعيل شبكة الوكلاء بالكامل ولن تحتاج لإعادة بناء التطبيق أبداً:"
+            text = "أدخل مفاتيح Gemini و Groq الصحيحة هنا لحل مشكلة الاتصال تماماً:"
             textSize = 12f
+            setTextColor(Color.LTGRAY)
             setPadding(0, 0, 0, dp(10))
         }
 
         layout.addView(infoText)
         layout.addView(geminiInput)
         layout.addView(groqInput)
-        layout.addView(openRouterInput)
-        layout.addView(cerebrasInput)
+        scrollView.addView(layout)
 
         AlertDialog.Builder(this)
-            .setTitle("⚙️ إعدادات محركات الذكاء الاصطناعي")
-            .setView(layout)
+            .setTitle("⚙️ إعدادات مفاتيح الـ API")
+            .setView(scrollView)
             .setPositiveButton("حفظ وتفعيل") { _, _ ->
                 prefs.edit()
                     .putString("gemini_key", geminiInput.text.toString().trim())
                     .putString("groq_key", groqInput.text.toString().trim())
-                    .putString("openrouter_key", openRouterInput.text.toString().trim())
-                    .putString("cerebras_key", cerebrasInput.text.toString().trim())
                     .apply()
-                Toast.makeText(this, "تم حفظ وتفعيل جميع المفاتيح بنجاح!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "تم الحفظ بنجاح!", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("إلغاء", null)
             .show()
@@ -596,7 +512,7 @@ class MainActivity : Activity() {
         }
         val items = projects.map { p -> "#${p.id} [${p.status}] - ${if(p.request.length>30) p.request.take(30)+"..." else p.request}" }.toTypedArray()
         AlertDialog.Builder(this)
-            .setTitle("📂 أرشيف مشاريع Bassel AI")
+            .setTitle("📂 الأرشيف")
             .setItems(items) { _, which -> displayProjectState(projects[which]) }
             .setNegativeButton("إغلاق", null)
             .show()
@@ -610,7 +526,7 @@ class MainActivity : Activity() {
         val logs = dbHelper.getAttemptsForProject(currentProjectId)
         val msg = if (logs.isEmpty()) "لا توجد محاولات مسجلة." else logs.joinToString("\n\n-----------------\n\n")
         AlertDialog.Builder(this)
-            .setTitle("📊 سجل أداء الوكلاء للمشروع #$currentProjectId")
+            .setTitle("📊 سجل أداء المحاولات")
             .setMessage(msg)
             .setPositiveButton("حسناً", null)
             .show()
