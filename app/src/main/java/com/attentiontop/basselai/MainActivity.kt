@@ -9,7 +9,9 @@ import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.view.Gravity
 import android.view.View
 import android.widget.*
@@ -21,6 +23,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
@@ -279,7 +283,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadModelsRegistry() {
         modelsList.clear()
-        val saved = prefs.getString("models_registry_v3", null)
+        val saved = prefs.getString("models_registry_v4", null)
         if (!saved.isNullOrEmpty()) {
             try {
                 val arr = JSONArray(saved)
@@ -303,9 +307,22 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (modelsList.isEmpty()) {
+            // النماذج الأساسية
             modelsList.add(AiAgentModel("g1", "Groq Llama 3.3", "GROQ", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile", "", "ALL"))
             modelsList.add(AiAgentModel("g2", "Gemini 1.5 Flash", "GEMINI", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-1.5-flash", "", "LEADER"))
             modelsList.add(AiAgentModel("g3", "OpenRouter Coder", "OPENROUTER", "https://openrouter.ai/api/v1/chat/completions", "deepseek/deepseek-chat:free", "", "CODER"))
+
+            // النماذج والمواقع المجانية الجديدة المضافة
+            modelsList.add(AiAgentModel("m_cerebras", "Cerebras Llama 3.3", "CUSTOM", "https://api.cerebras.ai/v1/chat/completions", "llama-3.3-70b", "", "ALL"))
+            modelsList.add(AiAgentModel("m_nvidia", "NVIDIA NIM Llama", "CUSTOM", "https://integrate.api.nvidia.com/v1/chat/completions", "meta/llama-3.1-70b-instruct", "", "REVIEWER"))
+            modelsList.add(AiAgentModel("m_deepseek", "DeepSeek Chat", "CUSTOM", "https://api.deepseek.com/v1/chat/completions", "deepseek-chat", "", "CODER"))
+            modelsList.add(AiAgentModel("m_mistral", "Mistral Small", "CUSTOM", "https://api.mistral.ai/v1/chat/completions", "mistral-small-latest", "", "ALL"))
+            modelsList.add(AiAgentModel("m_silicon", "SiliconFlow Qwen", "CUSTOM", "https://api.siliconflow.cn/v1/chat/completions", "Qwen/Qwen2.5-72B-Instruct", "", "ALL"))
+            modelsList.add(AiAgentModel("m_deepinfra", "DeepInfra Llama", "CUSTOM", "https://api.deepinfra.com/v1/openai/chat/completions", "meta-llama/Meta-Llama-3.1-8B-Instruct", "", "ALL"))
+            modelsList.add(AiAgentModel("m_fireworks", "Fireworks Llama", "CUSTOM", "https://api.fireworks.ai/inference/v1/chat/completions", "accounts/fireworks/models/llama-v3-70b-instruct", "", "ALL"))
+            modelsList.add(AiAgentModel("m_novita", "Novita AI Llama", "CUSTOM", "https://api.novita.ai/v3/openai/chat/completions", "meta-llama/llama-3.3-70b-instruct", "", "ALL"))
+            modelsList.add(AiAgentModel("m_github", "GitHub GPT-4o", "CUSTOM", "https://models.inference.ai.azure.com", "gpt-4o", "", "LEADER"))
+
             saveModelsRegistry()
         }
 
@@ -327,7 +344,7 @@ class MainActivity : AppCompatActivity() {
             })
         }
         prefs.edit()
-            .putString("models_registry_v3", arr.toString())
+            .putString("models_registry_v4", arr.toString())
             .putString("manual_leader_id", manualLeaderId)
             .putBoolean("auto_prompt_enhance", autoPromptEnhance)
             .apply()
@@ -463,12 +480,12 @@ class MainActivity : AppCompatActivity() {
         layout.addView(createSpacer(10))
 
         layout.addView(createDialogLabel("اسم العرض:"))
-        val nameIn = createDialogInput("مثال: DeepSeek V3", existing?.name ?: "")
+        val nameIn = createDialogInput("مثال: Cerebras Llama", existing?.name ?: "")
         layout.addView(nameIn)
         layout.addView(createSpacer(10))
 
         layout.addView(createDialogLabel("معرف النموذج (Model ID):"))
-        val modelIdIn = createDialogInput("مثال: gemini-1.5-flash", existing?.modelId ?: "")
+        val modelIdIn = createDialogInput("مثال: llama-3.3-70b", existing?.modelId ?: "")
         layout.addView(modelIdIn)
         layout.addView(createSpacer(10))
 
@@ -728,7 +745,7 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         for (m in healthyModels) {
-                            val refinePrompt = "الكود الأساسي 'خ' حصل على نسبة $bestScore% وهي أقل من الحد المطلوب (90%). قم بتعديله وتصحيحه بالكامل ليكون مثالياً:\n\n$bestCode"
+                            val refinePrompt = "الكود الأساسي حصل على نسبة $bestScore% وهي أقل من الحد المطلوب (90%). قم بتعديله وتصحيحه بالكامل ليكون مثالياً:\n\n$bestCode"
                             val refRes = callAiModelApi(m, refinePrompt)
                             if (refRes.first && refRes.second.isNotBlank()) {
                                 proposals[m.id] = refRes.second
@@ -799,6 +816,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun idOfModel(m: AiAgentModel): String = m.id
 
+    // دالة تنزيل الـ ZIP المُحدثة لتعمل بحفظ حقيقي في مجلد التنزيلات (Downloads)
     private fun generateAndDownloadZip() {
         if (finalConsensusCode.isEmpty()) {
             Toast.makeText(this, "لا يوجد كود معتمد لتنزيله حالياً", Toast.LENGTH_SHORT).show()
@@ -806,25 +824,46 @@ class MainActivity : AppCompatActivity() {
         }
 
         try {
-            val baos = ByteArrayOutputStream()
-            val zos = ZipOutputStream(baos)
+            val fileName = "BasselAI_Project_${System.currentTimeMillis()}.zip"
+            val fos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = contentResolver
+                val contentValues = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/zip")
+                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+                val uri = resolver.insert(android.provider.MediaStore.Files.getContentUri("external"), contentValues)
+                uri?.let { resolver.openOutputStream(it) }
+            } else {
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!downloadsDir.exists()) downloadsDir.mkdirs()
+                val targetFile = File(downloadsDir, fileName)
+                FileOutputStream(targetFile)
+            }
 
-            zos.putNextEntry(ZipEntry("main.py"))
-            zos.write(finalConsensusCode.toByteArray(Charsets.UTF_8))
-            zos.closeEntry()
+            if (fos != null) {
+                val zos = ZipOutputStream(fos)
 
-            zos.putNextEntry(ZipEntry("README.md"))
-            val readme = "# Bassel AI Generated Project\n\nPrompt: $lastConfirmedPrompt\n\nGenerated by Multi-Agent Consensus System."
-            zos.write(readme.toByteArray(Charsets.UTF_8))
-            zos.closeEntry()
+                zos.putNextEntry(ZipEntry("main.py"))
+                zos.write(finalConsensusCode.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
 
-            zos.putNextEntry(ZipEntry("audit_report.txt"))
-            zos.write(lastAuditReport.toByteArray(Charsets.UTF_8))
-            zos.closeEntry()
+                zos.putNextEntry(ZipEntry("README.md"))
+                val readme = "# Bassel AI Generated Project\n\nPrompt: $lastConfirmedPrompt\n\nGenerated by Multi-Agent Consensus System."
+                zos.write(readme.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
 
-            zos.close()
+                zos.putNextEntry(ZipEntry("audit_report.txt"))
+                zos.write(lastAuditReport.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
 
-            Toast.makeText(this, "تم ضغط المشروع في ملف ZIP بنجاح!", Toast.LENGTH_LONG).show()
+                zos.close()
+                fos.close()
+
+                Toast.makeText(this, "تم حفظ ملف الـ ZIP في مجلد التنزيلات (Downloads) بنجاح!", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(this, "فشل إنشاء ملف الـ ZIP", Toast.LENGTH_SHORT).show()
+            }
 
         } catch (e: Exception) {
             Toast.makeText(this, "فشل ضغط الملف: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
@@ -839,7 +878,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ==================== دوال الاتصال الآمنة والمحدثة (منع خطأ 404 نهائياً) ====================
     private fun callAiModelApi(model: AiAgentModel, promptText: String): Pair<Boolean, String> {
         return try {
             if (model.providerType == "GEMINI") {
@@ -855,7 +893,7 @@ class MainActivity : AppCompatActivity() {
     private fun callGeminiRestApiFixed(model: AiAgentModel, prompt: String): Pair<Boolean, String> {
         val cleanModelId = model.modelId.trim().removePrefix("models/")
         val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$cleanModelId:generateContent?key=${model.apiKey.trim()}"
-        
+
         val bodyObj = JSONObject().apply {
             put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
         }
