@@ -1,6 +1,6 @@
 package com.attentiontop.basselai
 
-graphics@import android.os.Bundle
+import android.os.Bundle
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
