@@ -2,6 +2,7 @@ package com.attentiontop.basselai
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import java.text.SimpleDateFormat
@@ -12,12 +13,13 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
 
     companion object {
         private const val DATABASE_NAME = "bassel_ai.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
 
         const val TABLE_PROJECTS = "projects"
         const val COLUMN_ID = "id"
         const val COLUMN_REQUEST = "request"
         const val COLUMN_PLAN = "plan"
+        const val COLUMN_EXECUTION = "execution_output"
         const val COLUMN_STATUS = "status"
         const val COLUMN_CREATED_AT = "created_at"
         const val COLUMN_UPDATED_AT = "updated_at"
@@ -35,6 +37,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         const val STATUS_ANALYSIS = "ANALYSIS"
         const val STATUS_WAITING_FOR_APPROVAL = "WAITING_FOR_APPROVAL"
         const val STATUS_APPROVED = "APPROVED"
+        const val STATUS_EXECUTING = "EXECUTING"
         const val STATUS_REJECTED = "REJECTED"
         const val STATUS_FAILED = "FAILED"
         const val STATUS_COMPLETED = "COMPLETED"
@@ -45,6 +48,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
                 + "$COLUMN_ID INTEGER PRIMARY KEY AUTOINCREMENT, "
                 + "$COLUMN_REQUEST TEXT NOT NULL, "
                 + "$COLUMN_PLAN TEXT, "
+                + "$COLUMN_EXECUTION TEXT, "
                 + "$COLUMN_STATUS TEXT NOT NULL, "
                 + "$COLUMN_CREATED_AT TEXT NOT NULL, "
                 + "$COLUMN_UPDATED_AT TEXT NOT NULL)")
@@ -58,8 +62,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
                 + "$ATTEMPT_OUTPUT TEXT, "
                 + "$ATTEMPT_ERROR TEXT, "
                 + "$ATTEMPT_DURATION_MS INTEGER, "
-                + "$ATTEMPT_CREATED_AT TEXT NOT NULL, "
-                + "FOREIGN KEY($ATTEMPT_PROJECT_ID) REFERENCES $TABLE_PROJECTS($COLUMN_ID) ON DELETE CASCADE)")
+                + "$ATTEMPT_CREATED_AT TEXT NOT NULL)")
         db.execSQL(createAttemptsTable)
     }
 
@@ -75,6 +78,11 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
                     "$ATTEMPT_DURATION_MS INTEGER, " +
                     "$ATTEMPT_CREATED_AT TEXT NOT NULL)")
         }
+        if (oldVersion < 3) {
+            try {
+                db.execSQL("ALTER TABLE $TABLE_PROJECTS ADD COLUMN $COLUMN_EXECUTION TEXT")
+            } catch (_: Exception) {}
+        }
     }
 
     private fun getCurrentTimestamp(): String {
@@ -84,27 +92,45 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
 
     fun createProject(request: String): Long {
         val db = this.writableDatabase
-        val currentTime = getCurrentTimestamp()
+        val now = getCurrentTimestamp()
         val values = ContentValues().apply {
             put(COLUMN_REQUEST, request)
             put(COLUMN_PLAN, "")
+            put(COLUMN_EXECUTION, "")
             put(COLUMN_STATUS, STATUS_ANALYSIS)
-            put(COLUMN_CREATED_AT, currentTime)
-            put(COLUMN_UPDATED_AT, currentTime)
+            put(COLUMN_CREATED_AT, now)
+            put(COLUMN_UPDATED_AT, now)
         }
         return db.insert(TABLE_PROJECTS, null, values)
     }
 
     fun savePlanAndWaitApproval(projectId: Long, plan: String): Boolean {
         val db = this.writableDatabase
-        val currentTime = getCurrentTimestamp()
         val values = ContentValues().apply {
             put(COLUMN_PLAN, plan)
             put(COLUMN_STATUS, STATUS_WAITING_FOR_APPROVAL)
-            put(COLUMN_UPDATED_AT, currentTime)
+            put(COLUMN_UPDATED_AT, getCurrentTimestamp())
         }
-        val rowsAffected = db.update(TABLE_PROJECTS, values, "$COLUMN_ID = ?", arrayOf(projectId.toString()))
-        return rowsAffected > 0
+        return db.update(TABLE_PROJECTS, values, "$COLUMN_ID = ?", arrayOf(projectId.toString())) > 0
+    }
+
+    fun saveExecutionAndComplete(projectId: Long, executionOutput: String): Boolean {
+        val db = this.writableDatabase
+        val values = ContentValues().apply {
+            put(COLUMN_EXECUTION, executionOutput)
+            put(COLUMN_STATUS, STATUS_COMPLETED)
+            put(COLUMN_UPDATED_AT, getCurrentTimestamp())
+        }
+        return db.update(TABLE_PROJECTS, values, "$COLUMN_ID = ?", arrayOf(projectId.toString())) > 0
+    }
+
+    fun updateProjectStatus(projectId: Long, status: String): Boolean {
+        val db = this.writableDatabase
+        val values = ContentValues().apply {
+            put(COLUMN_STATUS, status)
+            put(COLUMN_UPDATED_AT, getCurrentTimestamp())
+        }
+        return db.update(TABLE_PROJECTS, values, "$COLUMN_ID = ?", arrayOf(projectId.toString())) > 0
     }
 
     fun logAttempt(projectId: Long, provider: String, role: String, output: String, error: String, durationMs: Long) {
@@ -121,13 +147,15 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         db.insert(TABLE_ATTEMPTS, null, values)
     }
 
-    fun updateProjectStatus(projectId: Long, status: String): Boolean {
-        val db = this.writableDatabase
-        val values = ContentValues().apply {
-            put(COLUMN_STATUS, status)
-            put(COLUMN_UPDATED_AT, getCurrentTimestamp())
+    fun getProjectById(projectId: Long): ProjectModel? {
+        val db = this.readableDatabase
+        val cursor = db.rawQuery("SELECT * FROM $TABLE_PROJECTS WHERE $COLUMN_ID = ?", arrayOf(projectId.toString()))
+        var project: ProjectModel? = null
+        if (cursor.moveToFirst()) {
+            project = parseProject(cursor)
         }
-        return db.update(TABLE_PROJECTS, values, "$COLUMN_ID = ?", arrayOf(projectId.toString())) > 0
+        cursor.close()
+        return project
     }
 
     fun getLatestProject(): ProjectModel? {
@@ -135,15 +163,54 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         val cursor = db.rawQuery("SELECT * FROM $TABLE_PROJECTS ORDER BY $COLUMN_ID DESC LIMIT 1", null)
         var project: ProjectModel? = null
         if (cursor.moveToFirst()) {
-            project = ProjectModel(
-                id = cursor.getLong(cursor.getColumnIndexOrThrow(COLUMN_ID)),
-                request = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_REQUEST)),
-                plan = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_PLAN)) ?: "",
-                status = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_STATUS))
-            )
+            project = parseProject(cursor)
         }
         cursor.close()
         return project
+    }
+
+    fun getAllProjects(): List<ProjectModel> {
+        val list = mutableListOf<ProjectModel>()
+        val db = this.readableDatabase
+        val cursor = db.rawQuery("SELECT * FROM $TABLE_PROJECTS ORDER BY $COLUMN_ID DESC LIMIT 30", null)
+        while (cursor.moveToNext()) {
+            list.add(parseProject(cursor))
+        }
+        cursor.close()
+        return list
+    }
+
+    fun getAttemptsForProject(projectId: Long): List<String> {
+        val logs = mutableListOf<String>()
+        val db = this.readableDatabase
+        val cursor = db.rawQuery(
+            "SELECT * FROM $TABLE_ATTEMPTS WHERE $ATTEMPT_PROJECT_ID = ? ORDER BY $ATTEMPT_ID ASC",
+            arrayOf(projectId.toString())
+        )
+        while (cursor.moveToNext()) {
+            val provider = cursor.getString(cursor.getColumnIndexOrThrow(ATTEMPT_PROVIDER)) ?: ""
+            val role = cursor.getString(cursor.getColumnIndexOrThrow(ATTEMPT_ROLE)) ?: ""
+            val duration = cursor.getLong(cursor.getColumnIndexOrThrow(ATTEMPT_DURATION_MS))
+            val err = cursor.getString(cursor.getColumnIndexOrThrow(ATTEMPT_ERROR)) ?: ""
+            val time = cursor.getString(cursor.getColumnIndexOrThrow(ATTEMPT_CREATED_AT)) ?: ""
+            val statusStr = if (err.isEmpty()) "نجاح ✅" else "فشل ❌ ($err)"
+            logs.add("[$time]\nالوكيل: $role | المحرك: $provider | المدة: ${duration}ms\nالحالة: $statusStr")
+        }
+        cursor.close()
+        return logs
+    }
+
+    private fun parseProject(cursor: Cursor): ProjectModel {
+        val execIndex = cursor.getColumnIndex(COLUMN_EXECUTION)
+        val execVal = if (execIndex != -1) cursor.getString(execIndex) ?: "" else ""
+        return ProjectModel(
+            id = cursor.getLong(cursor.getColumnIndexOrThrow(COLUMN_ID)),
+            request = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_REQUEST)) ?: "",
+            plan = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_PLAN)) ?: "",
+            execution = execVal,
+            status = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_STATUS)) ?: "",
+            createdAt = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_CREATED_AT)) ?: ""
+        )
     }
 }
 
@@ -151,5 +218,7 @@ data class ProjectModel(
     val id: Long,
     val request: String,
     val plan: String,
-    val status: String
+    val execution: String,
+    val status: String,
+    val createdAt: String
 )
