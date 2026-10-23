@@ -1,7 +1,6 @@
 package com.attentiontop.basselai
 
 import android.os.Bundle
-import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -18,12 +17,9 @@ import java.net.URL
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit.database: AppDatabase // Will use dbHelper
     private lateinit var dbHelper: AppDatabase
     private lateinit var inputRequest: EditText
     private lateinit var btnAnalyze: Button
-    private lateinit var btnApprove: Button
-    private lateinit var btnReject: Button
     private lateinit var txtResult: TextView
     private lateinit var txtStatus: TextView
 
@@ -38,11 +34,9 @@ class MainActivity : AppCompatActivity() {
 
         inputRequest = findViewById(R.id.inputRequest)
         btnAnalyze = findViewById(R.id.btnAnalyze)
-        // افترض أن هذه الأزرار موجودة في التخطيط أو سيتم التعامل معها برمجياً
         txtResult = findViewById(R.id.txtResult)
         txtStatus = findViewById(R.id.txtStatus)
 
-        // استعادة آخر مشروع نشط عند فتح التطبيق لمنع ضياع السياق
         restoreLatestProject()
 
         btnAnalyze.setOnClickListener {
@@ -68,7 +62,7 @@ class MainActivity : AppCompatActivity() {
                 currentProjectId = project.id
                 when (project.status) {
                     AppDatabase.STATUS_ANALYSIS -> {
-                        txtStatus.statusText("الحالة: جاري التحليل...")
+                        txtStatus.text = "الحالة: جاري التحليل..."
                     }
                     AppDatabase.STATUS_WAITING_FOR_APPROVAL -> {
                         txtResult.text = "استعادة المشروع (ID: ${project.id}):\n\n${project.plan}\n\n[الخطة تنتظر موافقتك الآن]"
@@ -84,7 +78,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } catch (e: Exception) {
-            txtStatus.text = "خطأ في استعادة الحالة المحلية."
+            txtStatus.text = "الحالة: جاهز"
         }
     }
 
@@ -92,7 +86,7 @@ class MainActivity : AppCompatActivity() {
         isNetworkCallInProgress = true
         currentProjectId = dbHelper.createProject(prompt)
 
-        txtStatus.text = "المنسق (Orchestrator): جاري تحليل الطلب وتوجيهه تلقائياً..."
+        txtStatus.text = "الحالة: جاري التحليل وتوجيه المهام..."
         txtResult.text = "الطلب: $prompt\n\n[جاري العمل خلف الكواليس عبر النماذج الذكية...]"
 
         lifecycleScope.launch(Dispatchers.IO) {
@@ -101,19 +95,19 @@ class MainActivity : AppCompatActivity() {
             var usedProvider = "gemini"
             var errorMsg = ""
 
-            // 1. المحاولة الأولى عبر Gemini API (العقل الأساسي)
+            // 1. المحاولة الأولى عبر Gemini API
             val geminiKey = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
             if (geminiKey.isNotEmpty() && geminiKey != "YOUR_GEMINI_API_KEY") {
                 try {
                     planOutput = callGeminiApi(prompt, geminiKey)
                 } catch (e: Exception) {
-                    errorMsg = e.message ?: "Gemini Timeout/Error"
+                    errorMsg = e.message ?: "Gemini Error"
                 }
             } else {
                 errorMsg = "مفتاح Gemini غير متوفر"
             }
 
-            // 2. التحويل التلقائي (Fallback) إلى Groq إذا فشل Gemini أو حدث Timeout
+            // 2. التوجيه التلقائي البديل (Fallback) إلى Groq إذا فشل Gemini
             if (planOutput == null) {
                 usedProvider = "groq"
                 val groqKey = try { BuildConfig.GROQ_API_KEY } catch (e: Exception) { "" }
@@ -133,15 +127,12 @@ class MainActivity : AppCompatActivity() {
             withContext(Dispatchers.Main) {
                 isNetworkCallInProgress = false
                 if (planOutput != null) {
-                    // تسجيل المحاولة الناجحة
                     dbHelper.logAttempt(currentProjectId, usedProvider, "planner", planOutput, "", duration)
-                    // حفظ الخطة وتحديث الحالة إلى بانتظار الموافقة
                     dbHelper.savePlanAndWaitApproval(currentProjectId, planOutput)
 
-                    txtResult.text = "--- خطة العمل المقترحة (عبر $usedProvider) ---\n\n$planOutput\n\nهل توافق على هذه الخطة؟"
+                    txtResult.text = "--- خطة العمل المقترحة (عبر $usedProvider) ---\n\n$planOutput"
                     txtStatus.text = "الحالة: بانتظار الموافقة"
                 } else {
-                    // تسجيل المحاولة الفاشلة
                     dbHelper.logAttempt(currentProjectId, usedProvider, "planner", "", errorMsg, duration)
                     dbHelper.updateProjectStatus(currentProjectId, AppDatabase.STATUS_FAILED)
 
@@ -224,9 +215,4 @@ class MainActivity : AppCompatActivity() {
             ?.optJSONObject("message")
             ?.optString("content", "") ?: throw RuntimeException("محتوى فارغ من Groq")
     }
-}
-
-// امتداد مساعد لتبسيط تحديث حالة النص إن لم يكن معرفاً
-private fun TextView.statusText(text: String) {
-    this.text = text
 }
