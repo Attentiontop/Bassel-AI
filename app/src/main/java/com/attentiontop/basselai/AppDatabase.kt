@@ -3,15 +3,13 @@ package com.attentiontop.basselai
 import android.content.Context
 import androidx.room.*
 
-// 1. جدول تخزين إعدادات الوكلاء والنماذج (Model/Agent Entity)
 @Entity(tableName = "ai_models_table")
 data class ModelEntity(
-    @PrimaryKey val providerName: String, // مثال: Groq, Google Gemini, OpenRouter
+    @PrimaryKey val providerName: String,
     val apiKey: String,
-    val modelId: String                   // مثال: gemini-1.5-flash أو نموذج OpenRouter المجاني
+    val modelId: String
 )
 
-// 2. واجهة العمليات (DAO)
 @Dao
 interface ModelDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -24,10 +22,8 @@ interface ModelDao {
     suspend fun getAllModels(): List<ModelEntity>
 }
 
-// 3. قاعدة البيانات الرئيسية (AppDatabase)
 @Database(entities = [ModelEntity::class], version = 1, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
-
     abstract fun modelDao(): ModelDao
 
     companion object {
