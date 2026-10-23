@@ -25,7 +25,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -283,7 +282,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadModelsRegistry() {
         modelsList.clear()
-        val saved = prefs.getString("models_registry_v4", null)
+        // تم تحديث المفتاح إلى v5 لضمان تحميل القيم الافتراضية الصحيحة والمحدثة
+        val saved = prefs.getString("models_registry_v5", null)
         if (!saved.isNullOrEmpty()) {
             try {
                 val arr = JSONArray(saved)
@@ -307,21 +307,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (modelsList.isEmpty()) {
-            // النماذج الأساسية
+            // النماذج الأساسية المجانية المضمونة
             modelsList.add(AiAgentModel("g1", "Groq Llama 3.3", "GROQ", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile", "", "ALL"))
             modelsList.add(AiAgentModel("g2", "Gemini 1.5 Flash", "GEMINI", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-1.5-flash", "", "LEADER"))
             modelsList.add(AiAgentModel("g3", "OpenRouter Coder", "OPENROUTER", "https://openrouter.ai/api/v1/chat/completions", "deepseek/deepseek-chat:free", "", "CODER"))
-
-            // النماذج والمواقع المجانية الجديدة المضافة
-            modelsList.add(AiAgentModel("m_cerebras", "Cerebras Llama 3.3", "CUSTOM", "https://api.cerebras.ai/v1/chat/completions", "llama-3.3-70b", "", "ALL"))
-            modelsList.add(AiAgentModel("m_nvidia", "NVIDIA NIM Llama", "CUSTOM", "https://integrate.api.nvidia.com/v1/chat/completions", "meta/llama-3.1-70b-instruct", "", "REVIEWER"))
-            modelsList.add(AiAgentModel("m_deepseek", "DeepSeek Chat", "CUSTOM", "https://api.deepseek.com/v1/chat/completions", "deepseek-chat", "", "CODER"))
-            modelsList.add(AiAgentModel("m_mistral", "Mistral Small", "CUSTOM", "https://api.mistral.ai/v1/chat/completions", "mistral-small-latest", "", "ALL"))
-            modelsList.add(AiAgentModel("m_silicon", "SiliconFlow Qwen", "CUSTOM", "https://api.siliconflow.cn/v1/chat/completions", "Qwen/Qwen2.5-72B-Instruct", "", "ALL"))
-            modelsList.add(AiAgentModel("m_deepinfra", "DeepInfra Llama", "CUSTOM", "https://api.deepinfra.com/v1/openai/chat/completions", "meta-llama/Meta-Llama-3.1-8B-Instruct", "", "ALL"))
-            modelsList.add(AiAgentModel("m_fireworks", "Fireworks Llama", "CUSTOM", "https://api.fireworks.ai/inference/v1/chat/completions", "accounts/fireworks/models/llama-v3-70b-instruct", "", "ALL"))
-            modelsList.add(AiAgentModel("m_novita", "Novita AI Llama", "CUSTOM", "https://api.novita.ai/v3/openai/chat/completions", "meta-llama/llama-3.3-70b-instruct", "", "ALL"))
-            modelsList.add(AiAgentModel("m_github", "GitHub GPT-4o", "CUSTOM", "https://models.inference.ai.azure.com", "gpt-4o", "", "LEADER"))
 
             saveModelsRegistry()
         }
@@ -344,7 +333,7 @@ class MainActivity : AppCompatActivity() {
             })
         }
         prefs.edit()
-            .putString("models_registry_v4", arr.toString())
+            .putString("models_registry_v5", arr.toString())
             .putString("manual_leader_id", manualLeaderId)
             .putBoolean("auto_prompt_enhance", autoPromptEnhance)
             .apply()
@@ -359,7 +348,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         container.addView(TextView(this).apply {
-            text = "إدارة النماذج والمفاتيح (يمكنك إضافة أي ذكاء اصطناعي في أي لحظة):"
+            text = "إدارة النماذج والمفاتيح:"
             setTextColor(Color.parseColor("#94A3B8"))
             textSize = 13f
             setPadding(0, 0, 0, 16)
@@ -480,12 +469,12 @@ class MainActivity : AppCompatActivity() {
         layout.addView(createSpacer(10))
 
         layout.addView(createDialogLabel("اسم العرض:"))
-        val nameIn = createDialogInput("مثال: Cerebras Llama", existing?.name ?: "")
+        val nameIn = createDialogInput("مثال: Groq Llama 3.3", existing?.name ?: "")
         layout.addView(nameIn)
         layout.addView(createSpacer(10))
 
         layout.addView(createDialogLabel("معرف النموذج (Model ID):"))
-        val modelIdIn = createDialogInput("مثال: llama-3.3-70b", existing?.modelId ?: "")
+        val modelIdIn = createDialogInput("مثال: llama-3.3-70b-versatile", existing?.modelId ?: "")
         layout.addView(modelIdIn)
         layout.addView(createSpacer(10))
 
@@ -521,7 +510,7 @@ class MainActivity : AppCompatActivity() {
                 val pType = codes[spProv.selectedItemPosition]
                 val rCode = roleCodes[spRole.selectedItemPosition]
                 val name = nameIn.text.toString().trim().ifEmpty { "AI Model" }
-                val mId = modelIdIn.text.toString().trim().ifEmpty { "gemini-1.5-flash" }
+                val mId = modelIdIn.text.toString().trim().ifEmpty { "llama-3.3-70b-versatile" }
                 val key = keyIn.text.toString().trim()
                 val url = urlIn.text.toString().trim()
 
@@ -816,7 +805,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun idOfModel(m: AiAgentModel): String = m.id
 
-    // دالة تنزيل الـ ZIP المُحدثة لتعمل بحفظ حقيقي في مجلد التنزيلات (Downloads)
     private fun generateAndDownloadZip() {
         if (finalConsensusCode.isEmpty()) {
             Toast.makeText(this, "لا يوجد كود معتمد لتنزيله حالياً", Toast.LENGTH_SHORT).show()
