@@ -37,15 +37,14 @@ class MainActivity : ComponentActivity() {
     private var busy = false
     private var currentStatus: String? = null
 
-    private val background = Color.rgb(17, 24, 39)
-    private val surface = Color.rgb(31, 41, 55)
-    private val foreground = Color.rgb(243, 244, 246)
-    private val muted = Color.rgb(156, 163, 175)
-    private val accent = Color.rgb(96, 165, 250)
+    private val pageColor = Color.rgb(17, 24, 39)
+    private val cardColor = Color.rgb(31, 41, 55)
+    private val textColor = Color.rgb(243, 244, 246)
+    private val hintColor = Color.rgb(156, 163, 175)
+    private val accentColor = Color.rgb(96, 165, 250)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         db = AppDatabase(this)
         buildInterface()
         restoreLatestProject()
@@ -56,7 +55,7 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(20, 20, 20, 24)
             layoutDirection = View.LAYOUT_DIRECTION_RTL
-            setBackgroundColor(background)
+            setBackgroundColor(pageColor)
         }
 
         val scroll = ScrollView(this)
@@ -65,43 +64,41 @@ class MainActivity : ComponentActivity() {
         root.addView(
             label("Bassel AI", 30f, true).apply {
                 gravity = Gravity.CENTER
-                setTextColor(accent)
+                setTextColor(accentColor)
             },
             params()
         )
 
         root.addView(
-            label("مساعدك لتحليل الطلبات وإعداد الخطط", 15f)
-                .apply {
-                    gravity = Gravity.CENTER
-                    setTextColor(muted)
-                },
+            label("مساعدك لتحليل الطلبات وإعداد الخطط", 15f).apply {
+                gravity = Gravity.CENTER
+                setTextColor(hintColor)
+            },
             params()
         )
 
         root.addView(label("محرك الذكاء الاصطناعي", 17f, true), params())
 
-        engineSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(
-                this@MainActivity,
-                android.R.layout.simple_spinner_dropdown_item,
-                arrayOf("Gemini", "Groq")
-            )
-        }
+        engineSpinner = Spinner(this)
+        engineSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            arrayOf("Gemini", "Groq")
+        )
         root.addView(engineSpinner, params())
 
         root.addView(label("اكتب طلبك", 17f, true), params())
 
         requestInput = EditText(this).apply {
             hint = "اكتب طلبك هنا..."
-            setHintTextColor(muted)
-            setTextColor(foreground)
+            setHintTextColor(hintColor)
+            setTextColor(textColor)
             textSize = 16f
             minLines = 4
             maxLines = 8
             gravity = Gravity.TOP or Gravity.RIGHT
             setPadding(14, 14, 14, 14)
-            setBackgroundColor(surface)
+            setBackgroundColor(cardColor)
         }
         root.addView(requestInput, params())
 
@@ -113,23 +110,22 @@ class MainActivity : ComponentActivity() {
 
         root.addView(label("الحالة", 17f, true), params())
 
-        statusText = label("جاهز", 15f)
-        statusText.setTextColor(accent)
+        statusText = label("جاهز", 15f).apply {
+            setTextColor(accentColor)
+        }
         root.addView(statusText, params())
 
         root.addView(label("النتيجة", 17f, true), params())
 
         resultText = label("ستظهر الإجابة هنا.", 16f).apply {
             setPadding(14, 14, 14, 14)
-            setBackgroundColor(surface)
+            setBackgroundColor(cardColor)
             setTextIsSelectable(true)
             gravity = Gravity.TOP or Gravity.RIGHT
         }
         root.addView(resultText, params())
 
-        copyButton = makeButton("نسخ الإجابة") {
-            copyAnswer()
-        }
+        copyButton = makeButton("نسخ الإجابة") { copyAnswer() }
         root.addView(copyButton, params())
 
         root.addView(label("قرارك بشأن الخطة", 17f, true), params())
@@ -156,7 +152,7 @@ class MainActivity : ComponentActivity() {
         text = value
         textSize = size
         gravity = Gravity.RIGHT
-        setTextColor(foreground)
+        setTextColor(textColor)
         if (bold) setTypeface(null, Typeface.BOLD)
         setPadding(0, 8, 0, 8)
     }
@@ -181,59 +177,49 @@ class MainActivity : ComponentActivity() {
         val manager = getSystemService(
             Context.INPUT_METHOD_SERVICE
         ) as InputMethodManager
-
         manager.hideSoftInputFromWindow(requestInput.windowToken, 0)
         requestInput.clearFocus()
     }
 
     private fun updateControls() {
         sendButton.isEnabled = !busy
-
-        val waiting =
-            !busy &&
+        val waiting = !busy &&
             currentStatus == AppDatabase.WAITING_FOR_APPROVAL
-
         approveButton.isEnabled = waiting
         rejectButton.isEnabled = waiting
-
-        copyButton.isEnabled = resultText.text
-            .toString()
-            .isNotBlank()
+        copyButton.isEnabled = resultText.text.toString()
+            .isNotBlank() && resultText.text.toString() != "ستظهر الإجابة هنا."
     }
 
     private fun submitRequest() {
         if (busy) return
 
         val request = requestInput.text.toString().trim()
-
         if (request.isBlank()) {
             statusText.text = "اكتب طلبًا أولاً."
             return
         }
 
         val directAnswer = simpleReply(request)
-
         if (directAnswer != null) {
             busy = true
-            currentStatus = null
+            currentStatus = AppDatabase.ANALYSIS
             updateControls()
             statusText.text = "جارٍ حفظ الإجابة..."
 
             lifecycleScope.launch {
                 try {
                     val id = withContext(Dispatchers.IO) {
-                        db.createProject(request).also {
-                            db.saveDirectAnswer(it, directAnswer)
-                        }
+                        val project = db.createProject(request)
+                        db.saveDirectAnswer(project, directAnswer)
+                        project
                     }
-
                     currentProjectId = id
                     currentStatus = AppDatabase.COMPLETED
                     resultText.text = directAnswer
                     statusText.text = "إجابة مباشرة"
                 } catch (e: Exception) {
-                    statusText.text =
-                        "تعذر حفظ الإجابة: ${e.message}"
+                    statusText.text = "تعذر حفظ الإجابة: ${e.message}"
                     resultText.text = directAnswer
                 } finally {
                     busy = false
@@ -263,16 +249,13 @@ class MainActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             var projectId = -1L
-
             try {
                 projectId = withContext(Dispatchers.IO) {
                     db.createProject(request)
                 }
-
                 currentProjectId = projectId
 
                 val started = System.currentTimeMillis()
-
                 val plan = withContext(Dispatchers.IO) {
                     when (engine) {
                         "Gemini" -> requestGemini(request, apiKey)
@@ -280,16 +263,12 @@ class MainActivity : ComponentActivity() {
                         else -> error("محرك غير معروف.")
                     }
                 }
-
                 val duration = System.currentTimeMillis() - started
 
                 withContext(Dispatchers.IO) {
                     db.recordAttempt(
-                        projectId = projectId,
-                        provider = engine,
-                        role = "planning",
-                        output = plan,
-                        durationMs = duration
+                        projectId, engine, "planning",
+                        output = plan, durationMs = duration
                     )
                     db.savePlanAndWaitApproval(projectId, plan)
                 }
@@ -297,17 +276,13 @@ class MainActivity : ComponentActivity() {
                 currentStatus = AppDatabase.WAITING_FOR_APPROVAL
                 resultText.text = plan
                 statusText.text = "اكتمل التحليل. الخطة تنتظر موافقتك."
-
             } catch (e: Exception) {
                 val message = e.message ?: "خطأ غير معروف"
-
                 if (projectId > 0L) {
                     withContext(Dispatchers.IO) {
                         try {
                             db.recordAttempt(
-                                projectId = projectId,
-                                provider = engine,
-                                role = "planning",
+                                projectId, engine, "planning",
                                 error = message
                             )
                             db.recordFailure(projectId, message)
@@ -315,15 +290,11 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-
                 currentStatus = if (projectId > 0L) {
                     AppDatabase.FAILED
-                } else {
-                    null
-                }
-
+                } else null
                 statusText.text = "فشل التحليل: $message"
-                resultText.text = "لم تكتمل العملية. لم تُحفظ خطة ناجحة."
+                resultText.text = "لم تكتمل العملية."
             } finally {
                 busy = false
                 updateControls()
@@ -332,9 +303,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun simpleReply(request: String): String? {
-        val normalized = request
-            .trim()
-            .lowercase()
+        val normalized = request.trim().lowercase()
             .replace("أ", "ا")
             .replace("إ", "ا")
             .replace("آ", "ا")
@@ -344,24 +313,16 @@ class MainActivity : ComponentActivity() {
 
         return when (normalized) {
             "مرحبا", "مرحبا بك", "السلام عليكم",
-            "السلام عليكم ورحمة الله وبركاته" ->
+            "السلام عليكم ورحمه الله وبركاته" ->
                 "وعليكم السلام ورحمة الله وبركاته!"
-
             "اهلا", "اهلا بك", "اهلين", "هلا" ->
                 "أهلًا بك! كيف يمكنني مساعدتك؟"
-
-            "صباح الخير" ->
-                "صباح النور!"
-
-            "مساء الخير" ->
-                "مساء النور!"
-
+            "صباح الخير" -> "صباح النور!"
+            "مساء الخير" -> "مساء النور!"
             "شكرا", "شكرا لك", "بارك الله فيك" ->
                 "العفو! أنا هنا لمساعدتك."
-
             "من انت", "ما اسمك" ->
                 "أنا Bassel AI، مساعدك لتنظيم الطلبات وتحليلها."
-
             else -> null
         }
     }
@@ -373,58 +334,42 @@ class MainActivity : ComponentActivity() {
         val systemPrompt = """
             أنت مساعد Bassel AI.
             أجب باللغة العربية بوضوح ودقة.
-            إذا كان الطلب سؤالًا مباشرًا فأجب مباشرة.
-            إذا كان يتطلب خطة، فقدم خطوات عملية مرقمة.
+            أجب مباشرة عن السؤال البسيط.
+            إذا تطلب الطلب خطة، قدم خطوات عملية.
             لا تدّع تنفيذ إجراءات خارجية.
             ميّز بين الحقائق والافتراضات.
         """.trimIndent()
 
         val body = JSONObject().apply {
-            put(
-                "systemInstruction",
+            put("systemInstruction", JSONObject().put(
+                "parts", JSONArray().put(
+                    JSONObject().put("text", systemPrompt)
+                )
+            ))
+            put("contents", JSONArray().put(
                 JSONObject().put(
-                    "parts",
-                    JSONArray().put(
-                        JSONObject().put("text", systemPrompt)
+                    "parts", JSONArray().put(
+                        JSONObject().put("text", request)
                     )
                 )
-            )
-            put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put(
-                        "parts",
-                        JSONArray().put(
-                            JSONObject().put("text", request)
-                        )
-                    )
-                )
-            )
+            ))
         }
 
         val response = postJson(
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
-            apiKey,
-            "x-goog-api-key",
-            body,
-            false
+            apiKey, "x-goog-api-key", body, false
         )
 
         val candidates = response.optJSONArray("candidates")
             ?: error("لم يُرجع Gemini نتائج.")
-
         val parts = candidates.optJSONObject(0)
-            ?.optJSONObject("content")
-            ?.optJSONArray("parts")
+            ?.optJSONObject("content")?.optJSONArray("parts")
             ?: error("استجابة Gemini لا تحتوي على نص.")
 
-        val output = (0 until parts.length()).mapNotNull { index ->
-            parts.optJSONObject(index)
-                ?.optString("text")
+        return (0 until parts.length()).mapNotNull { i ->
+            parts.optJSONObject(i)?.optString("text")
                 ?.takeIf { it.isNotBlank() }
-        }.joinToString("\n").trim()
-
-        return output.ifBlank {
+        }.joinToString("\n").trim().ifBlank {
             error("أعاد Gemini نتيجة فارغة.")
         }
     }
@@ -437,39 +382,24 @@ class MainActivity : ComponentActivity() {
             put("model", "openai/gpt-oss-120b")
             put("temperature", 0.2)
             put("max_completion_tokens", 2048)
-            put(
-                "messages",
-                JSONArray()
-                    .put(
-                        JSONObject().apply {
-                            put("role", "system")
-                            put(
-                                "content",
-                                """
-                                أنت مساعد Bassel AI.
-                                أجب باللغة العربية بوضوح ودقة.
-                                أجب مباشرة عن الأسئلة البسيطة.
-                                استخدم خطة مرقمة عند الحاجة فقط.
-                                لا تدّع تنفيذ إجراءات خارجية.
-                                """.trimIndent()
-                            )
-                        }
-                    )
-                    .put(
-                        JSONObject().apply {
-                            put("role", "user")
-                            put("content", request)
-                        }
-                    )
+            put("messages", JSONArray()
+                .put(JSONObject().apply {
+                    put("role", "system")
+                    put("content",
+                        "أنت مساعد Bassel AI. أجب بالعربية بوضوح. " +
+                        "أجب مباشرة عن الأسئلة البسيطة، واستخدم خطة عند الحاجة. " +
+                        "لا تدّع تنفيذ إجراءات خارجية.")
+                })
+                .put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", request)
+                })
             )
         }
 
         val response = postJson(
             "https://api.groq.com/openai/v1/chat/completions",
-            apiKey,
-            "Authorization",
-            body,
-            true
+            apiKey, "Authorization", body, true
         )
 
         val choices = response.optJSONArray("choices")
@@ -477,8 +407,7 @@ class MainActivity : ComponentActivity() {
 
         return choices.optJSONObject(0)
             ?.optJSONObject("message")
-            ?.optString("content")
-            ?.trim()
+            ?.optString("content")?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: error("أعاد Groq نتيجة فارغة.")
     }
@@ -490,59 +419,43 @@ class MainActivity : ComponentActivity() {
         body: JSONObject,
         bearer: Boolean
     ): JSONObject {
-        val connection =
-            URL(url).openConnection() as HttpURLConnection
-
+        val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.requestMethod = "POST"
             connection.connectTimeout = 20000
             connection.readTimeout = 60000
             connection.doOutput = true
-
             connection.setRequestProperty(
-                "Content-Type",
-                "application/json; charset=UTF-8"
+                "Content-Type", "application/json; charset=UTF-8"
+            )
+            connection.setRequestProperty(
+                headerName, if (bearer) "Bearer $apiKey" else apiKey
             )
 
-            connection.setRequestProperty(
-                headerName,
-                if (bearer) "Bearer $apiKey" else apiKey
-            )
-
-            connection.outputStream.use { stream ->
-                stream.write(body.toString().toByteArray(Charsets.UTF_8))
+            connection.outputStream.use {
+                it.write(body.toString().toByteArray(Charsets.UTF_8))
             }
 
             val code = connection.responseCode
-
             val stream = if (code in 200..299) {
                 connection.inputStream
-            } else {
-                connection.errorStream
-            }
+            } else connection.errorStream
 
-            val responseText = stream
-                ?.bufferedReader(Charsets.UTF_8)
-                ?.use { it.readText() }
-                .orEmpty()
+            val responseText = stream?.bufferedReader(Charsets.UTF_8)
+                ?.use { it.readText() }.orEmpty()
 
             if (code !in 200..299) {
                 val message = try {
-                    JSONObject(responseText)
-                        .optJSONObject("error")
+                    JSONObject(responseText).optJSONObject("error")
                         ?.optString("message")
                 } catch (_: Exception) {
                     null
                 }
-
-                error(
-                    "HTTP $code: ${
-                        message?.takeIf { it.isNotBlank() }
-                            ?: responseText.take(300)
-                    }"
-                )
+                error("HTTP $code: ${
+                    message?.takeIf { it.isNotBlank() }
+                        ?: responseText.take(300)
+                }")
             }
-
             return JSONObject(responseText)
         } finally {
             connection.disconnect()
@@ -551,7 +464,6 @@ class MainActivity : ComponentActivity() {
 
     private fun recordDecision(approved: Boolean) {
         if (busy) return
-
         if (currentProjectId <= 0L ||
             currentStatus != AppDatabase.WAITING_FOR_APPROVAL
         ) {
@@ -568,22 +480,15 @@ class MainActivity : ComponentActivity() {
                 withContext(Dispatchers.IO) {
                     db.recordDecision(currentProjectId, approved)
                 }
-
                 currentStatus = if (approved) {
                     AppDatabase.APPROVED
-                } else {
-                    AppDatabase.REJECTED
-                }
+                } else AppDatabase.REJECTED
 
                 statusText.text = if (approved) {
-                    "تم تسجيل الموافقة. لم يُنفذ أي إجراء تلقائيًا."
-                } else {
-                    "تم تسجيل رفض الخطة."
-                }
+                    "تم تسجيل الموافقة. لم يُنفذ إجراء تلقائيًا."
+                } else "تم تسجيل رفض الخطة."
             } catch (e: Exception) {
-                statusText.text =
-                    "تعذر تسجيل القرار: ${e.message}"
-
+                statusText.text = "تعذر تسجيل القرار: ${e.message}"
                 restoreLatestProject()
             } finally {
                 busy = false
@@ -594,7 +499,6 @@ class MainActivity : ComponentActivity() {
 
     private fun copyAnswer() {
         val answer = resultText.text.toString().trim()
-
         if (answer.isBlank() || answer == "ستظهر الإجابة هنا.") {
             statusText.text = "لا توجد إجابة لنسخها."
             return
@@ -604,11 +508,9 @@ class MainActivity : ComponentActivity() {
             val clipboard = getSystemService(
                 Context.CLIPBOARD_SERVICE
             ) as ClipboardManager
-
             clipboard.setPrimaryClip(
                 ClipData.newPlainText("Bassel AI", answer)
             )
-
             statusText.text = "تم نسخ الإجابة."
         } catch (e: Exception) {
             statusText.text = "تعذر النسخ: ${e.message}"
@@ -626,44 +528,31 @@ class MainActivity : ComponentActivity() {
 
                 currentProjectId = project.id
                 currentStatus = project.status
-
                 requestInput.setText(project.request)
                 resultText.text = project.plan ?: ""
 
                 statusText.text = when (project.status) {
                     AppDatabase.ANALYSIS ->
                         "الطلب محفوظ، ولم يكتمل تحليله."
-
                     AppDatabase.WAITING_FOR_APPROVAL ->
                         "الخطة تنتظر موافقتك."
-
                     AppDatabase.APPROVED ->
                         "تمت الموافقة. لم يُنفذ إجراء تلقائيًا."
-
-                    AppDatabase.REJECTED ->
-                        "تم رفض الخطة."
-
+                    AppDatabase.REJECTED -> "تم رفض الخطة."
                     AppDatabase.FAILED ->
                         "فشل التحليل. يمكنك إرسال الطلب مجددًا."
-
-                    AppDatabase.COMPLETED ->
-                        "إجابة مباشرة محفوظة."
-
+                    AppDatabase.COMPLETED -> "إجابة مباشرة محفوظة."
                     else -> "حالة المشروع: ${project.status}"
                 }
-
                 updateControls()
             } catch (e: Exception) {
-                statusText.text =
-                    "تعذر استعادة المشروع: ${e.message}"
+                statusText.text = "تعذر استعادة المشروع: ${e.message}"
             }
         }
     }
 
     override fun onDestroy() {
-        if (::db.isInitialized) {
-            db.close()
-        }
+        if (::db.isInitialized) db.close()
         super.onDestroy()
     }
 }
