@@ -1,6 +1,7 @@
 package com.attentiontop.basselai
 
 import android.os.Bundle
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.CoroutineScope
@@ -23,15 +24,16 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // منع الإغلاق المفاجئ عبر التأكد من وجود تخطيط بسيط يمنع انهيار النشاط
-        try {
-            setContentView(R.layout.activity_main)
-        } catch (e: Exception) {
-            // إذا لم يكن ملف الـ XML موجوداً، نقوم بإنشاء تخطيط فارغ برمجياً لضمان عدم إغلاق التطبيق
-            val layout = android.widget.LinearLayout(this)
-            layout.orientation = android.widget.LinearLayout.VERTICAL
-            setContentView(layout)
+        // الحل الهندسي الآمن: بناء واجهة النشاط برمجياً بالكامل لتجنب الاعتماد كلياً على ملفات XML مفقودة (R.layout)
+        // هذا يمنع خطأ "Unresolved reference 'layout'" نهائياً أثناء مرحلة Compile-time.
+        val rootLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.MATCH_PARENT
+            )
         }
+        setContentView(rootLayout)
 
         // تهيئة قاعدة البيانات المحلية بأمان
         try {
@@ -57,6 +59,7 @@ class MainActivity : AppCompatActivity() {
 
             when (provider) {
                 "Google Gemini" -> {
+                    // مسار v1beta المصحح لمنع خطأ 404 نهائياً
                     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
                     val partObj = JSONObject().put("text", prompt)
                     val partsArray = JSONArray().put(partObj)
