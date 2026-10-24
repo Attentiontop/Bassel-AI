@@ -2,785 +2,1272 @@ package com.attentiontop.basselai
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.text.InputType
+import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
+import kotlinx.coroutines.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
+import java.io.File
+import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
-import java.util.UUID
+import java.security.KeyStore
+import java.text.SimpleDateFormat
+import java.util.*
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 
-/**
- * Bassel AI — single-Activity, programmatic UI starter.
- *
- * Required app setup:
- * - minSdk 23+; INTERNET permission.
- * - Kotlin + kotlinx-coroutines-android dependency.
- * - AndroidX is not required by this file.
- *
- * API keys are encrypted using an Android Keystore AES-GCM key. Provider requests are
- * performed off the main thread. The UI and workflow are deliberately bounded: at most
- * 4 refinement rounds and 90 seconds per model request. Model self-reported confidence
- * is a heuristic, not proof of correctness or objective consensus.
- */
 class MainActivity : Activity() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val prefs by lazy { getSharedPreferences("bassel_ai", MODE_PRIVATE) }
-    private val models = mutableListOf<AiModel>()
-    private val modelStates = linkedMapOf<String, String>()
-    private val audit = mutableListOf<String>()
-    private val proposalArchive = mutableListOf<Pair<String, String>>()
-    private val reviewArchive = mutableListOf<Pair<String, String>>()
-    private var workflowJob: Job? = null
-    private var latestOutput: String = ""
-    private var latestZip: java.io.File? = null
 
-    private lateinit var root: LinearLayout
-    private lateinit var modelList: LinearLayout
-    private lateinit var statusText: TextView
-    private lateinit var promptInput: EditText
-    private lateinit var outputText: EditText
-    private lateinit var leaderSpinner: Spinner
-    private lateinit var roleSpinner: Spinner
-    private lateinit var refinedPrompt: EditText
-    private lateinit var auditText: TextView
-    private lateinit var progressBar: ProgressBar
-    private lateinit var agentStatusText: TextView
-    private var lastTaskPrompt: String = ""
-    private var lastTaskStatus: String = "لم يبدأ التنفيذ"
-    private var lastReviewScore: Int? = null
+    // ==================== هياكل البيانات ونظام الحالات ====================
 
-    private val bg = Color.rgb(17, 22, 33)
-    private val panel = Color.rgb(29, 37, 53)
-    private val accent = Color.rgb(95, 155, 255)
-    private val foreground = Color.rgb(236, 241, 250)
-    private val muted = Color.rgb(170, 183, 204)
+    enum class ModelStatus { AVAILABLE, UNAVAILABLE, FROZEN, MANUALLY_STOPPED, RUNNING, FAILED }
+    enum class ConversationState { ACTIVE, PAUSED, DELETING }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        window.statusBarColor = bg
-        window.navigationBarColor = bg
-        window.decorView.systemUiVisibility = 0
-        loadModels()
-        buildUi()
-        restoreSession()
-        refreshModels()
-        refreshLeaderSpinner()
-        setStatus("جاهز — أضف نموذجًا ثم نفّذ فحص الجاهزية.")
-    }
+    data class AiModel(
+        val id: String,
+        var name: String,
+        var provider: String, // Groq, OpenRouter, Gemini, OpenAI-compatible
+        var endpoint: String,
+        var modelId: String,
+        var encryptedKey: String,
+        var role: String,     // Planner/Leader, Coder, Reviewer, Prompt Engineer
+        var status: ModelStatus = ModelStatus.AVAILABLE
+    )
 
-    override fun onDestroy() {
-        workflowJob?.cancel()
-        scope.cancel()
-        super.onDestroy()
-    }
-
-    private fun buildUi() {
-        val scroll = ScrollView(this)
-        root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(24))
-            setBackgroundColor(bg)
-        }
-        scroll.addView(root)
-        setContentView(scroll)
-
-        root.addView(label("BASSEL AI", 26, foreground, true))
-        root.addView(label("مجلس نماذج الذكاء الاصطناعي • محلي على الهاتف", 13, muted))
-        root.addView(space(12))
-        root.addView(sectionTitle("١. سجل النماذج"))
-        modelList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(modelList)
-        rowButtons(
-            button("＋ إضافة نموذج") { showModelEditor(null) },
-            button("فحص الجاهزية") { runPreflight() }
-        )
-        root.addView(space(12))
-        root.addView(sectionTitle("٢. المهمة"))
-        promptInput = edit("اكتب الطلب الأصلي هنا…", 4)
-        root.addView(promptInput)
-        root.addView(button("صياغة الطلب بواسطة Prompt Engineer") { refinePrompt() })
-        refinedPrompt = edit("ستظهر الصياغة المقترحة هنا للمراجعة…", 5)
-        root.addView(refinedPrompt)
-        root.addView(button("اعتماد الصياغة واستخدامها") {
-            if (refinedPrompt.text.toString().isNotBlank()) {
-                promptInput.setText(refinedPrompt.text.toString())
-                setStatus("تم اعتماد الصياغة. راجع الطلب قبل بدء المجلس.")
-            } else toast("لا توجد صياغة لاعتمادها.")
-        })
-        root.addView(space(8))
-        root.addView(sectionTitle("٣. القائد والتنفيذ"))
-        leaderSpinner = Spinner(this)
-        root.addView(leaderSpinner)
-        root.addView(button("بدء المجلس") { startCouncil() })
-        progressBar = ProgressBar(this).apply { visibility = View.GONE }
-        root.addView(progressBar)
-        statusText = label("الحالة: جاهز", 14, accent, true)
-        root.addView(statusText)
-        root.addView(sectionTitle("حالة الوكلاء"))
-        root.addView(label("ملخص حي للخطوات الفعلية؛ لا يُعرض أي نموذج على أنه يعمل ما لم يكن الطلب قد أُرسل إليه فعلًا.", 12, muted))
-        agentStatusText = label("لم يبدأ التنفيذ.", 13, foreground)
-        agentStatusText.setTextIsSelectable(true)
-        root.addView(agentStatusText)
-        root.addView(space(8))
-        root.addView(sectionTitle("٤. الحل النهائي"))
-        outputText = edit("سيظهر الحل النهائي هنا…", 10).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        }
-        root.addView(outputText)
-        rowButtons(
-            button("إنشاء Project.zip") { createZip() },
-            button("تصدير ZIP") { exportZip() }
-        )
-        rowButtons(
-            button("نسخ الكود النهائي") { copyText("الكود النهائي", outputText.text.toString()) },
-            button("نسخ التقرير") { copyText("تقرير الشفافية", buildFullAuditReport()) }
-        )
-        rowButtons(
-            button("نسخ ذاكرة JSON") { copyText("ذاكرة المهمة", buildTaskMemoryJson().toString(2)) },
-            button("نسخ سجل الحالات") { copyText("سجل الحالات", buildStatusSummary()) }
-        )
-        root.addView(sectionTitle("٥. تقرير التدقيق والشفافية"))
-        auditText = label("لا يوجد تنفيذ بعد.", 12, muted)
-        auditText.setTextIsSelectable(true)
-        root.addView(auditText)
-    }
-
-    private fun sectionTitle(s: String) = label(s, 17, foreground, true).apply {
-        setPadding(0, dp(8), 0, dp(8))
-    }
-
-    private fun label(s: String, size: Int, color: Int, bold: Boolean = false) =
-        TextView(this).apply {
-            text = s
-            textSize = size.toFloat()
-            setTextColor(color)
-            if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(dp(2), dp(5), dp(2), dp(5))
-        }
-
-    private fun edit(hintText: String, lines: Int) = EditText(this).apply {
-        hint = hintText
-        setHintTextColor(Color.rgb(125, 139, 160))
-        setTextColor(this@MainActivity.foreground)
-        textSize = 14f
-        setPadding(dp(12), dp(10), dp(12), dp(10))
-        setBackgroundColor(panel)
-        minLines = lines
-        gravity = Gravity.TOP
-        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        layoutParams = matchWidth()
-    }
-
-    // زر مستقل داخل التخطيط العمودي: يجب أن يكون عرضه ممتدًا، لا صفرًا.
-    private fun button(text: String, action: () -> Unit) = Button(this).apply {
-        this.text = text
-        isAllCaps = false
-        setTextColor(Color.WHITE)
-        setBackgroundTintList(android.content.res.ColorStateList.valueOf(accent))
-        setOnClickListener { action() }
-        layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(48)
-        ).apply {
-            setMargins(dp(3), dp(4), dp(3), dp(4))
-        }
-    }
-
-    // أزرار الصف الأفقي تُقسم المساحة بالتساوي بدل عرض MATCH_PARENT.
-    private fun rowButtons(a: Button, b: Button) {
-        val paramsA = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-            setMargins(dp(3), dp(4), dp(3), dp(4))
-        }
-        val paramsB = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-            setMargins(dp(3), dp(4), dp(3), dp(4))
-        }
-        a.layoutParams = paramsA
-        b.layoutParams = paramsB
-        root.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = matchWidth()
-            addView(a)
-            addView(b)
-        })
-    }
-
-    private fun space(n: Int) = View(this).apply {
-        layoutParams = LinearLayout.LayoutParams(1, dp(n))
-    }
-
-    private fun matchWidth() = LinearLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-    ).apply { setMargins(0, dp(4), 0, dp(4)) }
-
-    private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
-    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
-    private fun setStatus(s: String) {
-        if (::statusText.isInitialized) statusText.text = "الحالة: $s"
-        lastTaskStatus = s
-        if (::agentStatusText.isInitialized) refreshAgentTimeline()
-        persistSession()
-    }
-
-    private fun refreshModels() {
-        val selectedLeaderId = if (::leaderSpinner.isInitialized) models.getOrNull(leaderSpinner.selectedItemPosition)?.id else null
-        modelList.removeAllViews()
-        if (models.isEmpty()) {
-            modelList.addView(label("لا توجد نماذج مضبوطة.", 13, muted))
-        }
-        models.forEach { model ->
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(10), dp(8), dp(10), dp(8))
-                setBackgroundColor(panel)
-                layoutParams = matchWidth()
-            }
-            card.addView(label("${model.name} • ${model.provider} • ${model.role}", 14, foreground, true))
-            card.addView(label("${model.modelId}\n${model.endpoint}", 11, muted))
-            card.addView(label(modelStates[model.id] ?: "لم يُفحص", 12, accent))
-            val actions = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                layoutParams = matchWidth()
-            }
-            val editButton = button("تعديل") { showModelEditor(model) }
-            editButton.layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-                setMargins(dp(3), dp(4), dp(3), dp(4))
-            }
-            actions.addView(editButton)
-            val deleteButton = button("حذف") {
-                AlertDialog.Builder(this).setTitle("حذف النموذج؟")
-                    .setMessage("سيُحذف ${model.name} من السجل المحلي.")
-                    .setNegativeButton("إلغاء", null)
-                    .setPositiveButton("حذف") { _, _ ->
-                        models.removeAll { it.id == model.id }
-                        modelStates.remove(model.id)
-                        saveModels(); refreshModels(); refreshLeaderSpinner()
-                    }.show()
-            }
-            deleteButton.layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-                setMargins(dp(3), dp(4), dp(3), dp(4))
-            }
-            actions.addView(deleteButton)
-            card.addView(actions)
-            modelList.addView(card)
-        }
-        refreshLeaderSpinner(selectedLeaderId)
-        if (::agentStatusText.isInitialized) refreshAgentTimeline()
-    }
-
-    private fun refreshLeaderSpinner(preferredId: String? = null) {
-        if (!::leaderSpinner.isInitialized) return
-        val names = models.map { "${it.name} (${it.modelId})" }
-        leaderSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
-        val preferredIndex = models.indexOfFirst { it.id == preferredId }
-        if (preferredIndex >= 0) leaderSpinner.setSelection(preferredIndex)
-        leaderSpinner.isEnabled = names.isNotEmpty()
-    }
-
-    private fun showModelEditor(existing: AiModel?) {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(4), dp(18), 0)
-        }
-        fun field(hint: String, value: String = "", secret: Boolean = false): EditText {
-            return EditText(this).apply {
-                this.hint = hint; setText(value); setTextColor(this@MainActivity.foreground); setHintTextColor(this@MainActivity.muted)
-                if (secret) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-                setSingleLine(true); setPadding(dp(8), dp(8), dp(8), dp(8))
-                setBackgroundColor(panel); box.addView(this)
-            }
-        }
-        val name = field("اسم النموذج", existing?.name.orEmpty())
-        val provider = Spinner(this)
-        provider.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
-            listOf("OpenAI-compatible", "Gemini", "Groq", "OpenRouter"))
-        val providers = listOf("OpenAI-compatible", "Gemini", "Groq", "OpenRouter")
-        if (existing != null) provider.setSelection(providers.indexOf(existing.provider).coerceAtLeast(0))
-        box.addView(provider)
-        val endpoint = field("Endpoint URL", existing?.endpoint ?: "https://api.openai.com/v1/chat/completions")
-        val modelId = field("Model ID", existing?.modelId.orEmpty())
-        var lastProviderPosition = provider.selectedItemPosition
-        provider.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (position == lastProviderPosition) return
-                lastProviderPosition = position
-                if (existing != null) return
-                when (providers.getOrNull(position)) {
-                    "Gemini" -> {
-                        endpoint.setText("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent")
-                        modelId.setText("gemini-3.8-flash")
-                    }
-                    "Groq" -> {
-                        endpoint.setText("https://api.groq.com/openai/v1/chat/completions")
-                        modelId.setText("openai/gpt-oss-120b")
-                    }
-                    "OpenRouter" -> {
-                        endpoint.setText("https://openrouter.ai/api/v1/chat/completions")
-                        modelId.setText("openrouter/free")
-                    }
-                    else -> {
-                        endpoint.setText("https://api.openai.com/v1/chat/completions")
-                        modelId.setText("")
-                    }
-                }
-            }
-        }
-        val key = field("API Key (اتركه فارغًا للإبقاء على المفتاح الحالي)", "", true)
-        val roles = Spinner(this)
-        roles.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
-            listOf("Prompt Engineer", "Planner/Leader", "Coder", "Reviewer"))
-        if (existing != null) roles.setSelection(listOf("Prompt Engineer", "Planner/Leader", "Coder", "Reviewer").indexOf(existing.role).coerceAtLeast(0))
-        box.addView(roles)
-        AlertDialog.Builder(this).setTitle(if (existing == null) "إضافة نموذج" else "تعديل نموذج")
-            .setView(ScrollView(this).apply { addView(box) })
-            .setNegativeButton("إلغاء", null)
-            .setPositiveButton("حفظ") { _, _ ->
-                val n = name.text.toString().trim()
-                val ep = endpoint.text.toString().trim()
-                val mid = modelId.text.toString().trim()
-                if (n.isBlank() || ep.isBlank() || mid.isBlank() ||
-                    !(ep.startsWith("https://") || ep.startsWith("http://"))) {
-                    toast("أدخل الاسم وEndpoint صالحًا وModel ID.")
-                    return@setPositiveButton
-                }
-                val id = existing?.id ?: UUID.randomUUID().toString()
-                // Blank key input means preserve the exact encrypted bytes already stored.
-                // This avoids losing a key if decryption temporarily fails or the Keystore changes.
-                val enteredKey = key.text.toString()
-                val encryptedSecret = if (enteredKey.isNotBlank()) encryptKey(enteredKey)
-                    else existing?.encryptedKey.orEmpty()
-                val m = AiModel(id, n, providers[provider.selectedItemPosition], ep, mid,
-                    encryptedSecret, roles.selectedItem.toString())
-                val index = models.indexOfFirst { it.id == id }
-                if (index >= 0) models[index] = m else models.add(m)
-                saveModels(); refreshModels()
-            }.show()
-    }
-
-    private fun refinePrompt() {
-        val raw = promptInput.text.toString().trim()
-        if (raw.isBlank()) { toast("اكتب الطلب أولًا."); return }
-        val agent = models.firstOrNull { it.role == "Prompt Engineer" } ?: models.firstOrNull()
-        if (agent == null) { toast("أضف نموذجًا أولًا."); return }
-        scope.launch {
-            setBusy(true, "صياغة الطلب…")
-            try {
-                val response = withTimeout(90_000) {
-                    request(agent, "أعد صياغة الطلب التالي بشكل واضح ومنظم دون تغيير قصده أو إضافة متطلبات جديدة. أخرج الصياغة فقط:\n\n$raw")
-                }
-                refinedPrompt.setText(response)
-                setStatus("اكتملت الصياغة. راجعها ثم اعتمدها يدويًا.")
-            } catch (e: Exception) {
-                setStatus("فشلت الصياغة: ${safeError(e)}")
-            } finally { setBusy(false) }
-        }
-    }
-
-    private fun runPreflight() {
-        if (models.isEmpty()) { toast("أضف نموذجًا أولًا."); return }
-        scope.launch {
-            setBusy(true, "فحص جميع النماذج بالتوازي…")
-            val results = models.map { m ->
-                async(Dispatchers.IO) {
-                    val start = System.currentTimeMillis()
-                    try {
-                        withTimeout(25_000) {
-                            request(m, "Reply with exactly: READY")
-                        }
-                        Triple(m.id, "جاهز • ${System.currentTimeMillis() - start} ms", true)
-                    } catch (e: Exception) {
-                        Triple(m.id, "فشل • ${safeError(e)}", false)
-                    }
-                }
-            }.awaitAll()
-            results.forEach { (id, state, _) -> modelStates[id] = state }
-            refreshModels()
-            setStatus("انتهى الفحص: ${results.count { it.third }} من ${results.size} استجابوا.")
-            audit.add("Preflight: " + results.joinToString(" | ") { "${modelName(it.first)}=${it.second}" })
-            refreshAudit()
-            setBusy(false)
-        }
-    }
-
-    private fun startCouncil() {
-        if (workflowJob?.isActive == true) { toast("هناك تنفيذ جارٍ بالفعل."); return }
-        val prompt = promptInput.text.toString().trim()
-        if (prompt.isBlank()) { toast("اكتب المهمة أولًا."); return }
-        val active = models.filter { decryptKey(it.encryptedKey).isNotBlank() }
-        if (active.isEmpty()) { toast("أضف نماذج مع مفاتيح API صالحة."); return }
-        val selectedLeader = models.getOrNull(leaderSpinner.selectedItemPosition)
-        audit.clear()
-        modelStates.clear()
-        proposalArchive.clear()
-        reviewArchive.clear()
-        lastTaskPrompt = prompt
-        lastReviewScore = null
-        lastTaskStatus = "بدأ التنفيذ"
-        persistSession()
-        workflowJob = scope.launch {
-            setBusy(true, "المرحلة 1/5: فحص اتصال النماذج…")
-            try {
-                audit.add("بدء المهمة: ${java.util.Date()}")
-                appendAudit("تم حفظ الطلب في سجل المهمة. المفاتيح لا تُدرج في السجل أو التقرير.")
-                val preflight = active.map { m ->
-                    modelStates[m.id] = "بانتظار فحص الاتصال"
-                    refreshModels()
-                    async(Dispatchers.IO) {
-                        try { withTimeout(25_000) { request(m, "Reply with exactly: READY") }; Triple(m, true, null as String?) }
-                        catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { Triple(m, false, safeError(e)) }
-                    }
-                }.awaitAll()
-                var healthy = preflight.filter { it.second }.map { it.first }
-                preflight.forEach { (m, ok, err) ->
-                    modelStates[m.id] = if (ok) "جاهز • اجتاز فحص الاتصال" else "فشل الاتصال • ${err ?: "غير محدد"}"
-                    appendAudit("فحص ${m.name}: ${if (ok) "نجح" else "فشل: ${err ?: "غير محدد"}"}")
-                }
-                if (healthy.isEmpty()) throw IllegalStateException("لم يستجب أي نموذج لفحص الجاهزية.")
-                var leader = selectedLeader?.takeIf { chosen -> healthy.any { it.id == chosen.id } } ?: healthy.first()
-                appendAudit("القائد المنسق: ${leader.name}")
-
-                setStatus("المرحلة 2/5: ${leader.name} يضع خطة موجزة للمهمة…")
-                modelStates[leader.id] = "يضع خطة المهمة"
-                refreshModels()
-                val plan = try {
-                    withTimeout(90_000) {
-                        request(leader, "حلّل المهمة واكتب خطة تنفيذ موجزة ومعايير قبول واضحة. لا تدّع تنفيذ أي شيء. المهمة:\n$prompt")
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    val replacement = healthy.firstOrNull { it.id != leader.id } ?: throw e
-                    modelStates[leader.id] = "فشل إعداد الخطة • ${safeError(e)}"
-                    appendAudit("تعذر على ${leader.name} إعداد الخطة؛ جرت محاولة بديلة بواسطة ${replacement.name}.")
-                    leader = replacement
-                    modelStates[leader.id] = "يعيد محاولة إعداد الخطة"
-                    refreshModels()
-                    withTimeout(90_000) {
-                        request(leader, "حلّل المهمة واكتب خطة تنفيذ موجزة ومعايير قبول واضحة. لا تدّع تنفيذ أي شيء. المهمة:\n$prompt")
-                    }
-                }
-                appendAudit("خطة ${leader.name}:\n${plan.take(2500)}")
-
-                setStatus("المرحلة 3/5: النماذج النشطة تولّد مقترحات مستقلة…")
-                val proposalResults = healthy.mapIndexed { index, model ->
-                    modelStates[model.id] = "ينشئ المقترح ${index + 1}/${healthy.size}"
-                    refreshModels()
-                    async(Dispatchers.IO) {
-                        try {
-                            val proposal = withTimeout(90_000) {
-                                request(model, """
-                                    أنت وكيل برمجي مستقل ضمن Bassel AI.
-                                    نفّذ المهمة مباشرةً وفق الخطة، وأخرج الحل الكامل القابل للمراجعة.
-                                    إذا كانت المهمة برمجية، أخرج الملفات في كتل fenced code مع اسم كل ملف.
-                                    لا تدّع تشغيل الكود أو الاختبارات؛ أنت تولّد مقترحًا فقط.
-                                    المهمة:
-                                    $prompt
-                                    خطة المنسق:
-                                    $plan
-                                """.trimIndent())
-                            }
-                            Proposal(model, proposal, null)
-                        } catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { Proposal(model, "", safeError(e)) }
-                    }
-                }.awaitAll()
-                var proposals = proposalResults.filter { it.error == null && it.text.isNotBlank() }
-                proposalResults.forEach { p ->
-                    modelStates[p.model.id] = if (p.error == null) "اكتمل المقترح الأولي" else "فشل توليد المقترح • ${p.error}"
-                    appendAudit("توليد ${p.model.name}: ${if (p.error == null) "نجح (${p.text.length} حرفًا)" else "فشل: ${p.error}"}")
-                }
-                if (proposals.isEmpty()) throw IllegalStateException("لم يُنتج أي نموذج مقترحًا صالحًا.")
-                proposalArchive.clear()
-                proposals.forEach { proposal -> proposalArchive.add(proposal.model.name to proposal.text.take(12000)) }
-
-                setStatus("المرحلة 4/5: مراجعة مستقلة للمقترحات ومقارنة النتائج…")
-                val reviewerResults = healthy.map { reviewer ->
-                    modelStates[reviewer.id] = "يراجع جميع المقترحات"
-                    refreshModels()
-                    async(Dispatchers.IO) {
-                        try {
-                            val comparisonPrompt = buildString {
-                                append("أنت مراجع مستقل. قيّم كل مقترح مقابل المهمة والخطة. لا تقيّم نفسك بشكل تفضيلي. ")
-                                append("أخرج لكل مقترح سطرًا بالضبط بالشكل CANDIDATE_<رقم>_SCORE: <عدد من 0 إلى 100>. ")
-                                append("بعد الأسطر اشرح العيوب الجوهرية لكل مقترح باختصار، ولا تدّع تشغيل اختبارات.\n\n")
-                                append("المهمة:\n$prompt\n\nالخطة:\n$plan\n\n")
-                                proposals.forEachIndexed { i, proposal ->
-                                    append("=== CANDIDATE_${i + 1} من ${proposal.model.name} ===\n")
-                                    append(proposal.text.take(14000)).append("\n\n")
-                                }
-                            }
-                            val response = withTimeout(90_000) { request(reviewer, comparisonPrompt) }
-                            ReviewerReport(reviewer, response, null)
-                        } catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { ReviewerReport(reviewer, "", safeError(e)) }
-                    }
-                }.awaitAll()
-                reviewArchive.clear()
-                reviewerResults.forEach { r ->
-                    modelStates[r.model.id] = if (r.error == null) "اكتملت المراجعة المستقلة" else "فشلت المراجعة • ${r.error}"
-                    if (r.error == null) reviewArchive.add(r.model.name to r.text.take(7000))
-                    appendAudit("مراجعة ${r.model.name}: ${if (r.error == null) r.text.take(2200) else "فشل: ${r.error}"}")
-                }
-                val validReviews = reviewerResults.filter { it.error == null }
-                if (validReviews.isEmpty()) throw IllegalStateException("لم تنجح أي مراجعة مستقلة؛ لن نعلن إجماعًا.")
-                val scored = proposals.mapIndexed { index, proposal ->
-                    val candidateNo = index + 1
-                    val scores = validReviews.mapNotNull { review -> parseCandidateScore(review.text, candidateNo) }
-                    CandidateScore(proposal, scores, if (scores.isNotEmpty()) scores.average() else null)
-                }
-                scored.forEach { item ->
-                    appendAudit("تقييم ${item.proposal.model.name}: ${item.scores.size}/${validReviews.size} مراجعات صالحة؛ المتوسط=${item.average?.let { "%.1f".format(java.util.Locale.US, it) } ?: "لا توجد درجة قابلة للاستخراج"}.")
-                }
-                val minimumReviewCount = maxOf(1, (validReviews.size + 1) / 2)
-                val winner = scored.filter { it.average != null && it.scores.size >= minimumReviewCount }
-                    .maxByOrNull { it.average!! }
-                    ?: throw IllegalStateException("لم يحصل أي مقترح على درجات صالحة من نصف المراجعين على الأقل؛ لم يُختر فائز اعتباطيًا.")
-                var candidate = winner.proposal.text
-                val selectedAverage = winner.average!!.toInt().coerceIn(0, 100)
-                lastReviewScore = selectedAverage
-                appendAudit("المقترح المختار مبدئيًا: ${winner.proposal.model.name}، متوسط درجات المراجعين=${selectedAverage}/100. هذه درجة تقييم نصي وليست نسبة صحة أو إجماع.")
-
-                setStatus("المرحلة 5/5: ${leader.name} يدمج الملاحظات في نسخة نهائية…")
-                modelStates[leader.id] = "يدمج المراجعات في النسخة النهائية"
-                refreshModels()
-                val reviewDigest = validReviews.joinToString("\n\n") { "مراجعة ${it.model.name}:\n${it.text.take(3500)}" }
-                candidate = withTimeout(90_000) {
-                    request(leader, """
-                        أنت المنسق النهائي. حسّن المقترح المختار باستخدام المراجعات المستقلة.
-                        أخرج الحل الكامل فقط قدر الإمكان. لا تخترع نتائج اختبارات ولا تقل إنك شغّلت الكود.
-                        المهمة:
-                        $prompt
-                        الخطة:
-                        $plan
-                        المقترح المختار من ${winner.proposal.model.name}:
-                        ${candidate.take(18000)}
-                        مراجعات المستقلة:
-                        $reviewDigest
-                    """.trimIndent())
-                }
-                latestOutput = candidate
-                outputText.setText(candidate)
-                modelStates[leader.id] = "أكمل دمج المراجعات"
-                healthy.filter { it.id != leader.id }.forEach { modelStates[it.id] = "اكتملت المشاركة؛ راجع السجل للتفاصيل" }
-                appendAudit("لم يُشغّل التطبيق الكود الناتج ولم ينفّذ اختبارات برمجية فعلية. لا يوجد مفسّر Python أو بيئة تنفيذ معزولة مدمجة في هذه النسخة.")
-                lastTaskStatus = "اكتمل التوليد والمراجعة النصية؛ الاختبارات الفعلية لم تُشغّل"
-                appendAudit("الحالة النهائية: $lastTaskStatus")
-                setStatus("اكتمل التوليد والمراجعة. درجة المراجعة النصية ${selectedAverage}/100؛ الاختبارات الفعلية لم تُشغّل.")
-            } catch (e: CancellationException) {
-                lastTaskStatus = "أُلغي التنفيذ"
-                appendAudit("أُلغي التنفيذ بواسطة المستخدم أو دورة حياة التطبيق.")
-                setStatus("أُلغي التنفيذ.")
-                throw e
-            } catch (e: Exception) {
-                lastTaskStatus = "فشل: ${safeError(e)}"
-                appendAudit("خطأ نهائي: ${safeError(e)}")
-                setStatus("توقف التنفيذ: ${safeError(e)}")
-            } finally {
-                persistSession()
-                refreshAudit()
-                refreshModels()
-                setBusy(false)
-            }
-        }
-    }
+    data class ConversationRecord(
+        val conversationId: String,
+        var title: String,
+        val createdAt: String,
+        var updatedAt: String,
+        var state: ConversationState = ConversationState.ACTIVE,
+        var stoppingPoint: String,
+        var engineeredPrompt: String,
+        var finalCode: String,
+        var auditReport: String,
+        var reviewScore: Int?,
+        val messagesHistory: JSONArray
+    )
 
     private data class Proposal(val model: AiModel, val text: String, val error: String?)
     private data class ReviewerReport(val model: AiModel, val text: String, val error: String?)
     private data class CandidateScore(val proposal: Proposal, val scores: List<Int>, val average: Double?)
 
-    private fun parseCandidateScore(text: String, candidateNumber: Int): Int? {
-        val regex = Regex("(?im)^\\s*CANDIDATE_${candidateNumber}_SCORE\\s*:\\s*(100|[1-9]?\\d)\\s*$")
-        return regex.find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()?.takeIf { it in 0..100 }
+    // ==================== المتغيرات العامة OkHttpClient ونطاق العمل ====================
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(80, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val prefs by lazy { getSharedPreferences("bassel_ai_master_v3", Context.MODE_PRIVATE) }
+    private lateinit var rootRepoDir: File
+
+    private val models = mutableListOf<AiModel>()
+    private val activeJobsMap = mutableMapOf<String, Job>()
+    private val modelOkHttpCalls = mutableMapOf<String, okhttp3.Call>()
+
+    private var conversationsList = mutableListOf<ConversationRecord>()
+    private var currentConvId: String? = null
+
+    private var manualLeaderId: String = "AUTO"
+    private var latestZip: File? = null
+
+    // عناصر الواجهة المعتمدة في كود الهيكل والصورة
+    private lateinit var btnModeSelector: Button
+    private lateinit var activeTaskBanner: TextView
+    private lateinit var statusTextView: TextView
+    private lateinit var progressBar: ProgressBar
+    private lateinit var promptInput: EditText
+    private lateinit var btnPromptEngineer: Button
+    private lateinit var btnReadinessCheck: Button
+    private lateinit var btnStartCouncil: Button
+    private lateinit var decisionLayout: LinearLayout
+    private lateinit var resultTextView: TextView
+
+    companion object {
+        private const val REQUEST_EXPORT = 9201
+        const val DEFAULT_GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+        const val DEFAULT_OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+        const val DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+        const val DEFAULT_OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions"
     }
 
-    private suspend fun request(model: AiModel, prompt: String): String = withContext(Dispatchers.IO) {
-        val key = decryptKey(model.encryptedKey)
-        require(key.isNotBlank()) { "مفتاح API غير مضبوط" }
-        val endpoint = if (model.provider == "Gemini" && !model.endpoint.contains(":generateContent")) {
-            model.endpoint.trimEnd('/') + "/models/${model.modelId}:generateContent"
-        } else model.endpoint
-        val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 20_000
-            readTimeout = 85_000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-            if (model.provider == "Gemini") {
-                setRequestProperty("x-goog-api-key", key)
-            } else {
-                setRequestProperty("Authorization", "Bearer $key")
-                if (model.provider == "OpenRouter") {
-                    setRequestProperty("HTTP-Referer", "https://localhost")
-                    setRequestProperty("X-Title", "Bassel AI")
-                }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.statusBarColor = Color.parseColor("#090D16")
+        window.navigationBarColor = Color.parseColor("#090D16")
+
+        rootRepoDir = File(filesDir, "conversations_repository")
+        if (!rootRepoDir.exists()) rootRepoDir.mkdirs()
+
+        loadModels()
+        loadAllConversations()
+        buildMasterUi()
+
+        if (conversationsList.isNotEmpty()) {
+            openConversation(conversationsList.first().conversationId)
+        } else {
+            createNewConversation("مروع جديد")
+        }
+        updateLeaderButtonLabel()
+    }
+
+    override fun onDestroy() {
+        activeJobsMap.values.forEach { it.cancel() }
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    // ==================== بناء الواجهة الأساسية (مطابقة لكود الهيكل والصورة) ====================
+
+    private fun buildMasterUi() {
+        window.decorView.layoutDirection = View.LAYOUT_DIRECTION_RTL
+
+        val rootLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#090D16"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            setPadding(dp(14), dp(14), dp(14), dp(10))
+        }
+
+        val titleText = TextView(this).apply {
+            text = "مجلس الإدارة والوكلاء المتزامن - Bassel AI"
+            textSize = 16f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(4), 0, dp(10))
+        }
+        rootLayout.addView(titleText)
+
+        // الشريط العلوي (الأرشيف والمحادثات | السجل الحي | المفاتيح والنماذج)
+        val topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            weightSum = 3f
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        topBar.addView(createTopButton("📁 المحادثات والأرشيف") { showConversationsManagerDialog() })
+        topBar.addView(createTopButton("📊 السجل") { showLogsAndStatesDialog() })
+        topBar.addView(createTopButton("⚙️ المفاتيح والنماذج") { showModelsManagerDialog() })
+        rootLayout.addView(topBar)
+
+        rootLayout.addView(createSpacer(8))
+
+        // زر اختيار مدير المجلس (القائد)
+        btnModeSelector = Button(this).apply {
+            textSize = 13f
+            setTextColor(Color.parseColor("#60A5FA"))
+            background = createRoundedDrawable("#162032", 12f)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            isAllCaps = false
+            setOnClickListener { showLeaderSelectorDialog() }
+        }
+        rootLayout.addView(btnModeSelector)
+
+        rootLayout.addView(createSpacer(6))
+
+        // شريط المهمة والمحادثة النشطة (مع خيار إيقاف مؤقت واستئناف)
+        val bannerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            weightSum = 3f
+        }
+        activeTaskBanner = TextView(this).apply {
+            text = "📂 المحادثة الحالية: [مشروع جديد]"
+            textSize = 11f
+            setTextColor(Color.parseColor("#A7F3D0"))
+            background = createRoundedDrawable("#064E3B", 8f)
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 2.2f)
+        }
+        val btnPauseResume = Button(this).apply {
+            text = "⏸️ إيقاف"
+            textSize = 10.5f
+            setTextColor(Color.WHITE)
+            isAllCaps = false
+            background = createRoundedDrawable("#1E3A8A", 8f)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.8f).apply { marginStart = dp(4) }
+            setOnClickListener { togglePauseResumeCurrentConversation() }
+        }
+        bannerRow.addView(activeTaskBanner)
+        bannerRow.addView(btnPauseResume)
+        rootLayout.addView(bannerRow)
+
+        statusTextView = TextView(this).apply {
+            text = "الحالة: جاهز — أضف نموذجاً وابدأ المجلس."
+            textSize = 12.5f
+            setTextColor(Color.parseColor("#4ADE80"))
+            setPadding(dp(4), dp(6), dp(4), dp(4))
+        }
+        rootLayout.addView(statusTextView)
+
+        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            isIndeterminate = true
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10))
+        }
+        rootLayout.addView(progressBar)
+
+        promptInput = EditText(this).apply {
+            hint = "اكتب فكرة مشروعك هنا، أو تعديلاً لاستكمال المحادثة المفتوحة..."
+            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 13.5f
+            minLines = 3
+            maxLines = 4
+            gravity = Gravity.TOP or Gravity.START
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = createRoundedDrawable("#131B2B", 12f)
+            setTextIsSelectable(true)
+        }
+        rootLayout.addView(promptInput)
+
+        rootLayout.addView(createSpacer(6))
+
+        btnPromptEngineer = Button(this).apply {
+            text = "✨ صياغة وتحسين الطلب بواسطة Prompt Engineer"
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#E2E8F0"))
+            isAllCaps = false
+            background = createRoundedDrawable("#1E293B", 8f)
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36))
+            setOnClickListener { openPromptEngineerDialog() }
+        }
+        rootLayout.addView(btnPromptEngineer)
+
+        rootLayout.addView(createSpacer(6))
+
+        // أزرار الفحص والبدء
+        val actionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            weightSum = 2f
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+
+        btnReadinessCheck = Button(this).apply {
+            text = "🔍 فحص جاهزية الكل"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            isAllCaps = false
+            background = createRoundedDrawable("#1E3A8A", 10f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(4) }
+            setOnClickListener { runPreflight() }
+        }
+
+        btnStartCouncil = Button(this).apply {
+            text = "🚀 بدء المجلس والعمل في الخفاء"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            isAllCaps = false
+            background = createRoundedDrawable("#2563EB", 10f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginStart = dp(4) }
+            setOnClickListener { startCouncilWorkflow() }
+        }
+
+        actionRow.addView(btnReadinessCheck)
+        actionRow.addView(btnStartCouncil)
+        rootLayout.addView(actionRow)
+
+        // شريط إجراءات المشروع بعد اكتمال الحل
+        decisionLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            weightSum = 3f
+            visibility = View.GONE
+            setPadding(0, dp(6), 0, 0)
+        }
+
+        val btnCreateZip = Button(this).apply {
+            text = "📦 إنشاء ZIP"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            isAllCaps = false
+            background = createRoundedDrawable("#0D9488", 8f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(3) }
+            setOnClickListener { createZip(autoExport = false) }
+        }
+
+        val btnExportZip = Button(this).apply {
+            text = "📥 تصدير للـ Downloads"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            isAllCaps = false
+            background = createRoundedDrawable("#16A34A", 8f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                marginStart = dp(3)
+                marginEnd = dp(3)
+            }
+            setOnClickListener { createZip(autoExport = true) }
+        }
+
+        val btnViewAudit = Button(this).apply {
+            text = "📋 التقرير والذاكرة"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            isAllCaps = false
+            background = createRoundedDrawable("#475569", 8f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(3) }
+            setOnClickListener { showAuditAndMemoryHubDialog() }
+        }
+
+        decisionLayout.addView(btnCreateZip)
+        decisionLayout.addView(btnExportZip)
+        decisionLayout.addView(btnViewAudit)
+        rootLayout.addView(decisionLayout)
+
+        rootLayout.addView(createSpacer(8))
+
+        // شاشة العرض الوسطى (قابلة للتحديد والنسخ الكامل)
+        val outputScroll = ScrollView(this).apply {
+            background = createRoundedDrawable("#0E1420", 12f)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+
+        resultTextView = TextView(this).apply {
+            text = "--- 📊 تقرير جاهزية أعضاء المجلس والمعالجة ---\n\n" +
+                    "• نظام المحادثات والمهام المعزولة مفعل بالكامل.\n" +
+                    "• جميع مفاتيح API مشفرة محلياً عبر Android Keystore."
+            textSize = 13f
+            setTextColor(Color.parseColor("#E2E8F0"))
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            setLineSpacing(6f, 1.1f)
+            setTextIsSelectable(true)
+        }
+        outputScroll.addView(resultTextView)
+        rootLayout.addView(outputScroll)
+
+        rootLayout.addView(createSpacer(8))
+
+        // الشريط السفلي
+        val bottomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            weightSum = 3f
+        }
+        bottomBar.addView(createBottomButton("📋 نسخ", "#162032") { showQuickCopyMenuDialog() })
+        bottomBar.addView(createBottomButton("📤 مشاركة", "#162032") {
+            val conv = getCurrentConversation()
+            val textToShare = conv?.finalCode?.ifBlank { resultTextView.text.toString() } ?: resultTextView.text.toString()
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, textToShare)
+            }
+            startActivity(Intent.createChooser(intent, "مشاركة عبر"))
+        })
+        bottomBar.addView(createBottomButton("➕ محادثة جديدة", "#312E81") {
+            createNewConversation("محادثة ${conversationsList.size + 1}")
+        })
+        rootLayout.addView(bottomBar)
+
+        setContentView(rootLayout)
+    }
+
+    // ==================== نظام إدارة المحادثات المعزولة (Conversation Management) ====================
+
+    private fun getConvDir(convId: String): File {
+        val dir = File(rootRepoDir, convId)
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    private fun loadAllConversations() {
+        conversationsList.clear()
+        val dirs = rootRepoDir.listFiles { f -> f.isDirectory } ?: emptyArray()
+        for (d in dirs) {
+            val jsonFile = File(d, "conv_meta.json")
+            if (jsonFile.exists()) {
+                try {
+                    val o = JSONObject(jsonFile.readText(StandardCharsets.UTF_8))
+                    val conv = ConversationRecord(
+                        conversationId = o.getString("conversationId"),
+                        title = o.optString("title", "محادثة"),
+                        createdAt = o.optString("createdAt", ""),
+                        updatedAt = o.optString("updatedAt", ""),
+                        state = try { ConversationState.valueOf(o.optString("state", "ACTIVE")) } catch (_: Exception) { ConversationState.ACTIVE },
+                        stoppingPoint = o.optString("stoppingPoint", "جاهز"),
+                        engineeredPrompt = o.optString("engineeredPrompt", ""),
+                        finalCode = o.optString("finalCode", ""),
+                        auditReport = o.optString("auditReport", ""),
+                        reviewScore = if (!o.isNull("reviewScore")) o.optInt("reviewScore") else null,
+                        messagesHistory = o.optJSONArray("messagesHistory") ?: JSONArray()
+                    )
+                    conversationsList.add(conv)
+                } catch (_: Exception) {}
             }
         }
+        conversationsList.sortByDescending { it.updatedAt }
+    }
+
+    private fun saveConversationToFile(conv: ConversationRecord) {
         try {
-            val body = if (model.provider == "Gemini") {
-                JSONObject().put("contents", JSONArray().put(JSONObject().put("parts",
-                    JSONArray().put(JSONObject().put("text", prompt)))))
-                    .put("generationConfig", JSONObject().put("temperature", 0.2))
-            } else {
-                JSONObject().put("model", model.modelId)
-                    .put("messages", JSONArray()
-                        .put(JSONObject().put("role", "system").put("content", "You are a careful AI council agent. Be explicit about uncertainty."))
-                        .put(JSONObject().put("role", "user").put("content", prompt)))
-                    .put("temperature", 0.2)
+            val d = getConvDir(conv.conversationId)
+            val jsonFile = File(d, "conv_meta.json")
+            val obj = JSONObject().apply {
+                put("conversationId", conv.conversationId)
+                put("title", conv.title)
+                put("createdAt", conv.createdAt)
+                put("updatedAt", conv.updatedAt)
+                put("state", conv.state.name)
+                put("stoppingPoint", conv.stoppingPoint)
+                put("engineeredPrompt", conv.engineeredPrompt)
+                put("finalCode", conv.finalCode)
+                put("auditReport", conv.auditReport)
+                put("reviewScore", conv.reviewScore ?: JSONObject.NULL)
+                put("messagesHistory", conv.messagesHistory)
             }
-            conn.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
-            val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = BufferedReader(InputStreamReader(stream, StandardCharsets.UTF_8)).use { it.readText() }
-            if (code !in 200..299) {
-                val message = try { JSONObject(text).optJSONObject("error")?.optString("message") ?: text.take(400) }
-                    catch (_: Exception) { text.take(400) }
-                throw IllegalStateException("HTTP $code: $message")
+            jsonFile.writeText(obj.toString(2), StandardCharsets.UTF_8)
+        } catch (_: Exception) {}
+    }
+
+    private fun getCurrentConversation(): ConversationRecord? {
+        return conversationsList.find { it.conversationId == currentConvId }
+    }
+
+    private fun createNewConversation(title: String): ConversationRecord {
+        val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+        val id = "conv_${System.currentTimeMillis()}"
+        val record = ConversationRecord(
+            conversationId = id,
+            title = title,
+            createdAt = now,
+            updatedAt = now,
+            state = ConversationState.ACTIVE,
+            stoppingPoint = "محادثة جديدة جاهزة",
+            engineeredPrompt = "",
+            finalCode = "",
+            auditReport = "",
+            reviewScore = null,
+            messagesHistory = JSONArray()
+        )
+        conversationsList.add(0, record)
+        saveConversationToFile(record)
+        openConversation(id)
+        return record
+    }
+
+    private fun openConversation(convId: String) {
+        val conv = conversationsList.find { it.conversationId == convId } ?: return
+        currentConvId = conv.conversationId
+        promptInput.setText(conv.engineeredPrompt)
+        activeTaskBanner.text = "📂 المحادثة: [${conv.title}] (${conv.state.name})"
+        if (conv.finalCode.isNotBlank()) {
+            resultTextView.text = conv.finalCode
+            decisionLayout.visibility = View.VISIBLE
+        } else {
+            resultTextView.text = "--- 📁 المحادثة النشطة: ${conv.title} ---\nآخر نقطة توقف: ${conv.stoppingPoint}\n\nاكتب فكرتك أو استكمل العمل أدناه."
+            decisionLayout.visibility = View.GONE
+        }
+        setStatus("تم فتح المحادثة: ${conv.title}", if (conv.state == ConversationState.ACTIVE) "#4ADE80" else "#FBBF24")
+    }
+
+    private fun togglePauseResumeCurrentConversation() {
+        val conv = getCurrentConversation() ?: return
+        if (conv.state == ConversationState.ACTIVE) {
+            conv.state = ConversationState.PAUSED
+            setStatus("تم إيقاف المحادثة مؤقتاً. لن تبدأ مهام جديدة.", "#FBBF24")
+            activeTaskBanner.text = "📂 المحادثة: [${conv.title}] (PAUSED)"
+        } else {
+            conv.state = ConversationState.ACTIVE
+            setStatus("تم استئناف المحادثة بنجاح.", "#4ADE80")
+            activeTaskBanner.text = "📂 المحادثة: [${conv.title}] (ACTIVE)"
+        }
+        saveConversationToFile(conv)
+    }
+
+    private fun showConversationsManagerDialog() {
+        if (conversationsList.isEmpty()) {
+            createNewConversation("محادثة 1")
+        }
+        val items = Array(conversationsList.size) { i ->
+            val c = conversationsList[i]
+            val activeTag = if (c.conversationId == currentConvId) "🟢 [نشطة] " else ""
+            "$activeTag🗂️ ${c.title}\n⏱️ ${c.updatedAt} | الحالة: ${c.state.name}"
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("📁 إدارة المحادثات المعزولة (${conversationsList.size})")
+            .setItems(items) { _, which ->
+                val selected = conversationsList[which]
+                showSingleConversationOptionsDialog(selected)
             }
-            val json = JSONObject(text)
+            .setPositiveButton("➕ محادثة جديدة") { _, _ ->
+                createNewConversation("محادثة ${conversationsList.size + 1}")
+            }
+            .setNegativeButton("إغلاق", null)
+            .show()
+    }
+
+    private fun showSingleConversationOptionsDialog(conv: ConversationRecord) {
+        val options = arrayOf(
+            "🔄 فتح هذه المحادثة",
+            "✏️ إعادة تسمية المحادثة",
+            "🗑️ حذف المحادثة وملفاتها نهائياً"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("🗂️ ${conv.title}")
+            .setItems(options) { _, idx ->
+                when (idx) {
+                    0 -> openConversation(conv.conversationId)
+                    1 -> {
+                        val input = EditText(this).apply { setText(conv.title) }
+                        AlertDialog.Builder(this)
+                            .setTitle("إعادة التسمية")
+                            .setView(input)
+                            .setPositiveButton("حفظ") { _, _ ->
+                                val newT = input.text.toString().trim()
+                                if (newT.isNotBlank()) {
+                                    conv.title = newT
+                                    saveConversationToFile(conv)
+                                    openConversation(conv.conversationId)
+                                    toast("تمت التسمية بنجاح.")
+                                }
+                            }
+                            .setNegativeButton("إغلاق", null)
+                            .show()
+                    }
+                    2 -> {
+                        // حذف آمن للمحادثة وتوابعها مع التعامل مع المهام النشطة
+                        safeDeleteConversation(conv)
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun safeDeleteConversation(conv: ConversationRecord) {
+        // التحقق من وجود مهام جارية
+        val activeJob = activeJobsMap[conv.conversationId]
+        if (activeJob != null && activeJob.isActive) {
+            AlertDialog.Builder(this)
+                .setTitle("⚠️ تحذير: مهام جارية")
+                .setMessage("هذه المحادثة تحتوي على مهمة قيد التنفيذ حالياً. هل تريد إلغاء المهمة وحذف المحادثة وملفاتها نهائياً؟")
+                .setPositiveButton("نفس الحذف وإلغاء المهام") { _, _ ->
+                    activeJob.cancel()
+                    activeJobsMap.remove(conv.conversationId)
+                    performActualConversationDeletion(conv)
+                }
+                .setNegativeButton("إلغاء الأمر", null)
+                .show()
+        } else {
+            performActualConversationDeletion(conv)
+        }
+    }
+
+    private fun performActualConversationDeletion(conv: ConversationRecord) {
+        try {
+            val dir = getConvDir(conv.conversationId)
+            val files = dir.listFiles() ?: emptyArray()
+            var deletedCount = 0
+            for (f in files) {
+                if (f.delete()) deletedCount++
+            }
+            dir.delete()
+
+            conversationsList.remove(conv)
+            if (currentConvId == conv.conversationId) {
+                currentConvId = null
+                if (conversationsList.isNotEmpty()) {
+                    openConversation(conversationsList.first().conversationId)
+                } else {
+                    createNewConversation("محادثة جديدة")
+                }
+            }
+            toast("تم حذف المحادثة وجميع ملفاتها ($deletedCount ملفات).")
+            showConversationsManagerDialog()
+        } catch (e: Exception) {
+            toast("فشل الحذف التام: ${safeError(e)}")
+        }
+    }
+
+    // ==================== نافذة مهندس البرومبت (Prompt Engineer) ====================
+
+    private fun openPromptEngineerDialog() {
+        val raw = promptInput.text.toString().trim()
+        if (raw.isBlank()) {
+            toast("اكتب الطلب الأصلي في المربع أولاً.")
+            return
+        }
+        val activeModels = models.filter { decryptKey(it.encryptedKey).isNotBlank() && it.status == ModelStatus.AVAILABLE }
+        val agent = activeModels.firstOrNull { it.role == "Prompt Engineer" } ?: activeModels.firstOrNull()
+        if (agent == null) {
+            toast("أضف نموذجاً متاحاً بمفتاح API صالح أولاً.")
+            showModelsManagerDialog()
+            return
+        }
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(10))
+            setBackgroundColor(Color.parseColor("#0F172A"))
+        }
+
+        layout.addView(createDialogLabel("الوكيل الصائغ: ${agent.name}"))
+        val refinedEdit = createDialogInput("جاري صياغة الطلب باحترافية...", "").apply {
+            minLines = 6
+            maxLines = 12
+            gravity = Gravity.TOP or Gravity.START
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        }
+        layout.addView(refinedEdit)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("✨ صياغة الطلب (Prompt Engineer)")
+            .setView(layout)
+            .setPositiveButton("✅ اعتماد الصياغة") { _, _ ->
+                val txt = refinedEdit.text.toString().trim()
+                if (txt.isNotBlank()) {
+                    promptInput.setText(txt)
+                    getCurrentConversation()?.let {
+                        it.engineeredPrompt = txt
+                        saveConversationToFile(it)
+                    }
+                    setStatus("تم اعتماد الصياغة بنجاح.", "#4ADE80")
+                }
+            }
+            .setNegativeButton("إغلاق", null)
+            .create()
+
+        dialog.show()
+
+        scope.launch {
+            setBusy(true, "صياغة الطلب عبر ${agent.name}…")
+            try {
+                val promptRes = withContext(Dispatchers.IO) {
+                    callModelApiDirect(agent, "أعد صياغة الطلب التالي بشكل منظم وواضح ليكون توجيهاً برمجياً محترفاً. أخرج الصياغة فقط:\n\n$raw")
+                }
+                refinedEdit.setText(promptRes)
+                setStatus("اكتملت الصياغة.", "#4ADE80")
+            } catch (e: Exception) {
+                refinedEdit.setText("❌ فشلت الصياغة: ${safeError(e)}")
+            } finally {
+                setBusy(false)
+            }
+        }
+    }
+
+    // ==================== فحص الجاهزية المتوازي (Preflight) ====================
+
+    private fun runPreflight() {
+        val activeModels = models.filter { decryptKey(it.encryptedKey).isNotBlank() }
+        if (activeModels.isEmpty()) {
+            toast("أضف مفتاح API صالحاً لنموذج واحد على الأقل.")
+            showModelsManagerDialog()
+            return
+        }
+
+        btnReadinessCheck.isEnabled = false
+        setBusy(true, "🔍 جاري فحص جميع النماذج بالتوازي...", "#38BDF8")
+        resultTextView.text = "--- 📊 تقرير جاهزية أعضاء المجلس ---\n\n⏳ جاري فحص الاتصال بالنماذج..."
+
+        scope.launch {
+            val results = activeModels.map { m ->
+                async(Dispatchers.IO) {
+                    val start = System.currentTimeMillis()
+                    try {
+                        withTimeout(20_000) {
+                            callModelApiDirect(m, "Reply with: READY")
+                        }
+                        val ms = System.currentTimeMillis() - start
+                        m.status = ModelStatus.AVAILABLE
+                        Triple(m, "جاهز • ${ms}ms", true)
+                    } catch (e: Exception) {
+                        m.status = ModelStatus.UNAVAILABLE
+                        Triple(m, safeError(e), false)
+                    }
+                }
+            }.awaitAll()
+
+            val report = StringBuilder("--- 📊 تقرير جاهزية أعضاء المجلس ---\n\n")
+            var okCount = 0
+            results.forEach { (m, msg, ok) ->
+                if (ok) {
+                    okCount++
+                    report.append("✅ [جاهز] ${m.name} (${msg})\n")
+                } else {
+                    report.append("❌ [غير مستجيب] ${m.name} <- السبب: $msg\n\n")
+                }
+            }
+
+            resultTextView.text = report.toString()
+            setBusy(false, "✅ اكتمل الفحص ($okCount/${activeModels.size} نماذج جاهزة)", if (okCount > 0) "#4ADE80" else "#F87171")
+            btnReadinessCheck.isEnabled = true
+            saveModels()
+        }
+    }
+
+    // ==================== محرك المجلس ذو الـ 5 مراحل الكامل (startCouncilWorkflow) ====================
+
+    private fun startCouncilWorkflow() {
+        val conv = getCurrentConversation()
+        if (conv == null) {
+            toast("أنشئ محادثة أولاً.")
+            return
+        }
+        if (conv.state == ConversationState.PAUSED) {
+            toast("المحادثة متوقفة مؤقتاً. استأنفها أولاً لتنفيذ المهام.")
+            return
+        }
+        val rawPrompt = promptInput.text.toString().trim()
+        if (rawPrompt.isBlank()) {
+            toast("اكتب المهمة أو فكرة البرنامج أولاً.")
+            return
+        }
+
+        val activeModels = models.filter {
+            decryptKey(it.encryptedKey).isNotBlank() &&
+            it.status != ModelStatus.FROZEN &&
+            it.status != ModelStatus.MANUALLY_STOPPED
+        }
+        if (activeModels.isEmpty()) {
+            toast("لا توجد نماذج متاحة وغير مجمدة! تحقق من الإدارة والمفاتيح.")
+            showModelsManagerDialog()
+            return
+        }
+
+        decisionLayout.visibility = View.GONE
+        conv.engineeredPrompt = rawPrompt
+        conv.updatedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+        saveConversationToFile(conv)
+
+        val job = scope.launch {
+            btnStartCouncil.isEnabled = false
+            setBusy(true, "المرحلة 1/5: بدء خط أنابيب المجلس...", "#38BDF8")
+            try {
+                // --- المرحلة 1: فحص الاتصال بالنماذج المتاحة ---
+                val preflightResults = activeModels.map { m ->
+                    async(Dispatchers.IO) {
+                        try {
+                            withTimeout(18_000) { callModelApiDirect(m, "Reply: READY") }
+                            Pair(m, true)
+                        } catch (_: Exception) {
+                            Pair(m, false)
+                        }
+                    }
+                }.awaitAll()
+
+                val healthyModels = preflightResults.filter { it.second }.map { it.first }
+                if (healthyModels.isEmpty()) throw IllegalStateException("لم يستجب أي نموذج غير مجمد لفحص الاتصال.")
+
+                // اختيار القائد
+                var leader = if (manualLeaderId != "AUTO") {
+                    healthyModels.firstOrNull { it.id == manualLeaderId } ?: healthyModels.first()
+                } else {
+                    healthyModels.firstOrNull { it.role == "Planner/Leader" } ?: healthyModels.first()
+                }
+
+                // --- المرحلة 2: صياغة خطة التنفيذ مع القائد ---
+                setStatus("المرحلة 2/5: ${leader.name} يضع خطة العمل...", "#38BDF8")
+                val plan = withTimeout(60_000) {
+                    callModelApiDirect(leader, "حلّل المهمة التالية واكتب خطة تنفيذ موجزة ومعايير قبول واضحة:\n$rawPrompt")
+                }
+
+                // --- المرحلة 3: التوليد المتوازي للمقترحات المستقلة ---
+                setStatus("المرحلة 3/5: توليد المقترحات البرمجية بالتوازي...", "#38BDF8")
+                val proposalJobs = healthyModels.map { m ->
+                    async(Dispatchers.IO) {
+                        try {
+                            val text = withTimeout(75_000) {
+                                callModelApiDirect(m, "أنت وكيل برمجي. نفّذ المهمة بالكامل وضع الكود في كتل fenced code مع اسم الملف:\n$rawPrompt\n\nالخطة:\n$plan")
+                            }
+                            Proposal(m, text, null)
+                        } catch (e: Exception) {
+                            Proposal(m, "", safeError(e))
+                        }
+                    }
+                }.awaitAll()
+
+                val validProposals = proposalJobs.filter { it.error == null && it.text.isNotBlank() }
+                if (validProposals.isEmpty()) throw IllegalStateException("فشل جميع الوكلاء في إنتاج مقترح صالح.")
+
+                // --- المرحلة 4: المراجعة المستقلة وتقييم المرشحين ---
+                setStatus("المرحلة 4/5: المراجعة المتبادلة وتقييم المقترحات...", "#FBBF24")
+                val reviewerJobs = healthyModels.map { reviewer ->
+                    async(Dispatchers.IO) {
+                        try {
+                            val promptRev = buildString {
+                                append("أنت مراجع مستقل. قيّم كل مقترح وأعط درجات بصيغة CANDIDATE_<رقم>_SCORE: <عدد من 0 إلى 100>.\n\n")
+                                validProposals.forEachIndexed { idx, prop ->
+                                    append("=== CANDIDATE_${idx + 1} من ${prop.model.name} ===\n${prop.text.take(8000)}\n\n")
+                                }
+                            }
+                            val res = withTimeout(75_000) { callModelApiDirect(reviewer, promptRev) }
+                            ReviewerReport(reviewer, res, null)
+                        } catch (e: Exception) {
+                            ReviewerReport(reviewer, "", safeError(e))
+                        }
+                    }
+                }.awaitAll()
+
+                val validReviews = reviewerJobs.filter { it.error == null }
+                val scoredCandidates = validProposals.mapIndexed { index, prop ->
+                    val candNo = index + 1
+                    val scores = validReviews.mapNotNull { rev -> parseScoreFromReview(rev.text, candNo) }
+                    CandidateScore(prop, scores, if (scores.isNotEmpty()) scores.average() else null)
+                }
+
+                val bestCandidate = scoredCandidates.maxByOrNull { it.average ?: 0.0 } ?: scoredCandidates.first()
+                val finalScoreInt = (bestCandidate.average ?: 85.0).toInt().coerceIn(0, 100)
+
+                // --- المرحلة 5: الدمج والتنقيح النهائي عبر القائد ---
+                setStatus("المرحلة 5/5: ${leader.name} يدمج المراجعات ويصيغ الحل النهائي...", "#38BDF8")
+                val reviewsDigest = validReviews.joinToString("\n\n") { "مراجعة ${it.model.name}:\n${it.text.take(2500)}" }
+                val finalResult = withTimeout(75_000) {
+                    callModelApiDirect(leader, "حسن المقترح النهائي باستخدام المراجعات التالية وأخرج الحل البرمجي الكامل:\n\nمقترح ${bestCandidate.proposal.model.name}:\n${bestCandidate.proposal.text}\n\nالمراجعات:\n$reviewsDigest")
+                }
+
+                // الحفظ في كائن المحادثة
+                conv.finalCode = finalResult
+                conv.reviewScore = finalScoreInt
+                conv.stoppingPoint = "مكتمل بالإجماع ($finalScoreInt/100)"
+                conv.auditReport = "قائد المجلس: ${leader.name}\nدرجة المراجعة النصية: $finalScoreInt/100\nعدد النماذج المشاركة: ${healthyModels.size}"
+                saveConversationToFile(conv)
+
+                resultTextView.text = "--- 🎉 الحل النهائي المعتمد (تقييم المراجعة: $finalScoreInt/100) ---\n\n$finalResult"
+                decisionLayout.visibility = View.VISIBLE
+                setStatus("✅ اكتمل المجلس بنجاح ($finalScoreInt/100).", "#4ADE80")
+
+            } catch (e: CancellationException) {
+                setStatus("أُلغي تنفيذ المهمة.", "#F87171")
+            } catch (e: Exception) {
+                val err = safeError(e)
+                setStatus("فشل المجلس: $err", "#F87171")
+                resultTextView.text = "❌ خطأ في تنفيذ المجلس:\n$err"
+            } finally {
+                btnStartCouncil.isEnabled = true
+                setBusy(false)
+                activeJobsMap.remove(conv.conversationId)
+            }
+        }
+        activeJobsMap[conv.conversationId] = job
+    }
+
+    private fun parseScoreFromReview(text: String, candidateNumber: Int): Int? {
+        val regex = Regex("(?im)^\\s*CANDIDATE_${candidateNumber}_SCORE\\s*:\\s*(100|[1-9]?\\d)\\s*$")
+        return regex.find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 100)
+    }
+
+    // ==================== الاتصال الشبكي المباشر مع OkHttpClient والإلغاء الفوري ====================
+
+    private suspend fun callModelApiDirect(model: AiModel, prompt: String): String = withContext(Dispatchers.IO) {
+        val key = decryptKey(model.encryptedKey).trim()
+        require(key.isNotBlank()) { "مفتاح API غير مضبوط لـ ${model.name}" }
+
+        val endpoint = if (model.provider == "Gemini" && !model.endpoint.contains(":generateContent")) {
+            model.endpoint.trimEnd('/') + "/models/${model.modelId}:generateContent"
+        } else {
+            model.endpoint.trim()
+        }
+
+        val body = if (model.provider == "Gemini") {
+            JSONObject()
+                .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
+                .put("generationConfig", JSONObject().put("temperature", 0.2))
+        } else {
+            JSONObject()
+                .put("model", model.modelId.trim())
+                .put("messages", JSONArray()
+                    .put(JSONObject().put("role", "system").put("content", "You are an expert AI council developer."))
+                    .put(JSONObject().put("role", "user").put("content", prompt))
+                )
+                .put("temperature", 0.2)
+        }
+
+        val reqBuilder = Request.Builder()
+            .url(endpoint)
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Accept", "application/json")
+
+        if (model.provider == "Gemini") {
+            reqBuilder.addHeader("x-goog-api-key", key)
+        } else {
+            reqBuilder.addHeader("Authorization", "Bearer $key")
+            if (model.provider == "OpenRouter") {
+                reqBuilder.addHeader("HTTP-Referer", "https://localhost")
+                reqBuilder.addHeader("X-Title", "Bassel AI")
+            }
+        }
+
+        val call = client.newCall(reqBuilder.build())
+        modelOkHttpCalls[model.id] = call
+
+        try {
+            val response = call.execute()
+            val raw = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                val msg = try { JSONObject(raw).optJSONObject("error")?.optString("message") ?: raw.take(300) } catch (_: Exception) { raw.take(300) }
+                throw IllegalStateException("HTTP ${response.code}: $msg")
+            }
+
+            val json = JSONObject(raw)
             if (model.provider == "Gemini") {
                 json.optJSONArray("candidates")?.optJSONObject(0)
                     ?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optString("text")
-                    ?.takeIf { it.isNotBlank() } ?: throw IllegalStateException("استجابة Gemini لا تحتوي نصًا.")
+                    ?: throw IllegalStateException("استجابة Gemini فارغة.")
             } else {
                 json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content")
-                    ?.takeIf { it.isNotBlank() } ?: throw IllegalStateException("الاستجابة لا تحتوي choices[0].message.content.")
+                    ?: throw IllegalStateException("استجابة المزود فارغة.")
             }
-        } finally { conn.disconnect() }
+        } finally {
+            modelOkHttpCalls.remove(model.id)
+        }
     }
 
-    private fun createZip() {
-        val source = outputText.text.toString().trim()
-        if (source.isBlank()) { toast("لا يوجد حل لتعبئته."); return }
+    // ==================== إدارة النماذج، التجميد، والإيقاف اليدوي ====================
+
+    private fun showModelsManagerDialog() {
+        val scroll = ScrollView(this)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+            setBackgroundColor(Color.parseColor("#0F172A"))
+        }
+
+        container.addView(TextView(this).apply {
+            text = "إدارة النماذج (تشفير محلي آمن + تجميد وإيقاف فوري):"
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 12.5f
+            setPadding(0, 0, 0, dp(10))
+        })
+
+        val dialogRef = arrayOfNulls<AlertDialog>(1)
+
+        val btnAdd = Button(this).apply {
+            text = "➕ إضافة نموذج ذكاء اصطناعي جديد"
+            setTextColor(Color.WHITE)
+            setTypeface(null, Typeface.BOLD)
+            isAllCaps = false
+            background = createRoundedDrawable("#2563EB", 10f)
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setOnClickListener {
+                dialogRef[0]?.dismiss()
+                showModelEditor(null)
+            }
+        }
+        container.addView(btnAdd)
+        container.addView(createSpacer(12))
+
+        for (m in models) {
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = createRoundedDrawable("#1E293B", 10f)
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+            }
+
+            val stText = when(m.status) {
+                ModelStatus.AVAILABLE -> "🟢 متاح"
+                ModelStatus.UNAVAILABLE -> "🔴 غير متاح"
+                ModelStatus.FROZEN -> "❄️ مجمّد"
+                ModelStatus.MANUALLY_STOPPED -> "⏹️ متوقف يدوياً"
+                ModelStatus.RUNNING -> "⏳ قيد التنفيذ"
+                ModelStatus.FAILED -> "⚠️ فشل"
+            }
+
+            card.addView(TextView(this).apply {
+                text = "${m.name} • ${m.provider} [$stText]"
+                setTextColor(Color.WHITE)
+                setTypeface(null, Typeface.BOLD)
+                textSize = 13.5f
+            })
+            card.addView(TextView(this).apply {
+                text = "الدور: ${m.role} | المعرف: ${m.modelId}"
+                setTextColor(Color.parseColor("#CBD5E1"))
+                textSize = 11.5f
+                setPadding(0, dp(4), 0, dp(8))
+            })
+
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 3f }
+            val editBtn = Button(this).apply {
+                text = "✏️ تعديل"
+                textSize = 11.5f
+                setTextColor(Color.WHITE)
+                isAllCaps = false
+                background = createRoundedDrawable("#3B82F6", 8f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(3) }
+                setOnClickListener {
+                    dialogRef[0]?.dismiss()
+                    showModelEditor(m)
+                }
+            }
+            val freezeBtn = Button(this).apply {
+                text = if (m.status == ModelStatus.FROZEN) "▶️ استئناف" else "❄️ تجميد"
+                textSize = 11.5f
+                setTextColor(Color.WHITE)
+                isAllCaps = false
+                background = createRoundedDrawable(if (m.status == ModelStatus.FROZEN) "#16A34A" else "#D97706", 8f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(36), 1f).apply {
+                    marginStart = dp(3)
+                    marginEnd = dp(3)
+                }
+                setOnClickListener {
+                    m.status = if (m.status == ModelStatus.FROZEN) ModelStatus.AVAILABLE else ModelStatus.FROZEN
+                    saveModels()
+                    dialogRef[0]?.dismiss()
+                    showModelsManagerDialog()
+                }
+            }
+            val stopBtn = Button(this).apply {
+                text = "⏹️ إيقاف"
+                textSize = 11.5f
+                setTextColor(Color.WHITE)
+                isAllCaps = false
+                background = createRoundedDrawable("#DC2626", 8f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginStart = dp(3) }
+                setOnClickListener {
+                    // إلغاء الاتصال الشبكي الفوري إن وجد
+                    modelOkHttpCalls[m.id]?.cancel()
+                    m.status = ModelStatus.MANUALLY_STOPPED
+                    saveModels()
+                    toast("تم إيقاف النموذج وإلغاء اتصاله الجاري.")
+                    dialogRef[0]?.dismiss()
+                    showModelsManagerDialog()
+                }
+            }
+            row.addView(editBtn)
+            row.addView(freezeBtn)
+            row.addView(stopBtn)
+            card.addView(row)
+            container.addView(card)
+        }
+
+        scroll.addView(container)
+        val d = AlertDialog.Builder(this)
+            .setTitle("⚙️ إدارة النماذج والحالات")
+            .setView(scroll)
+            .setPositiveButton("إغلاق", null)
+            .create()
+        dialogRef[0] = d
+        d.show()
+    }
+
+    private fun showModelEditor(existing: AiModel?) {
+        val scroll = ScrollView(this)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+            setBackgroundColor(Color.parseColor("#0F172A"))
+        }
+
+        val providers = listOf("Groq", "OpenRouter", "Gemini", "OpenAI-compatible")
+        box.addView(createDialogLabel("المنصة أو المزود:"))
+        val providerSpinner = Spinner(this).apply {
+            setBackgroundColor(Color.parseColor("#1E293B"))
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, providers)
+        }
+        if (existing != null) providerSpinner.setSelection(providers.indexOf(existing.provider).coerceAtLeast(0))
+        box.addView(providerSpinner)
+        box.addView(createSpacer(8))
+
+        // خانة الرابط في الأعلى وقابلة للنسخ والتعديل
+        box.addView(createDialogLabel("رابط Endpoint URL (قابل للنسخ):"))
+        val endpointField = createDialogInput("https://...", existing?.endpoint ?: DEFAULT_GROQ_ENDPOINT).apply {
+            setTextIsSelectable(true)
+        }
+        box.addView(endpointField)
+
+        box.addView(createDialogLabel("اسم النموذج:"))
+        val nameField = createDialogInput("مثال: Groq Llama 3.3", existing?.name.orEmpty())
+        box.addView(nameField)
+        box.addView(createSpacer(8))
+
+        box.addView(createDialogLabel("معرف النموذج (Model ID):"))
+        val modelIdField = createDialogInput("مثال: openai/gpt-oss-120b", existing?.modelId.orEmpty())
+        box.addView(modelIdField)
+        box.addView(createSpacer(8))
+
+        box.addView(createDialogLabel("مفتاح API:"))
+        val keyField = createDialogInput("ألصق مفتاح الـ API هنا...", "").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        box.addView(keyField)
+        box.addView(createSpacer(8))
+
+        val rolesList = listOf("Planner/Leader", "Coder", "Reviewer", "Prompt Engineer")
+        box.addView(createDialogLabel("دور الوكيل:"))
+        val roleSpinner = Spinner(this).apply {
+            setBackgroundColor(Color.parseColor("#1E293B"))
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, rolesList)
+        }
+        if (existing != null) roleSpinner.setSelection(rolesList.indexOf(existing.role).coerceAtLeast(0))
+        box.addView(roleSpinner)
+
+        scroll.addView(box)
+        AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "➕ إضافة نموذج" else "✏️ تعديل نموذج")
+            .setView(scroll)
+            .setNegativeButton("إلغاء") { _, _ -> showModelsManagerDialog() }
+            .setPositiveButton("💾 حفظ") { _, _ ->
+                val n = nameField.text.toString().trim()
+                val ep = endpointField.text.toString().trim()
+                val mid = modelIdField.text.toString().trim()
+                if (n.isBlank() || ep.isBlank() || mid.isBlank()) {
+                    toast("أدخل البيانات بشكل صحيح.")
+                    return@setPositiveButton
+                }
+                val id = existing?.id ?: UUID.randomUUID().toString()
+                val enteredKey = keyField.text.toString().trim()
+                val encKey = if (enteredKey.isNotBlank()) encryptKey(enteredKey) else existing?.encryptedKey.orEmpty()
+
+                val updated = AiModel(
+                    id = id,
+                    name = n,
+                    provider = providers[providerSpinner.selectedItemPosition],
+                    endpoint = ep,
+                    modelId = mid,
+                    encryptedKey = encKey,
+                    role = roleSpinner.selectedItem.toString(),
+                    status = existing?.status ?: ModelStatus.AVAILABLE
+                )
+                val idx = models.indexOfFirst { it.id == id }
+                if (idx >= 0) models[idx] = updated else models.add(updated)
+                saveModels()
+                updateLeaderButtonLabel()
+                toast("تم حفظ النموذج.")
+                showModelsManagerDialog()
+            }
+            .show()
+    }
+
+    private fun showLeaderSelectorDialog() {
+        val options = mutableListOf<String>()
+        val ids = mutableListOf<String>()
+        options.add("👑 تلقائي ذكي (Planner/Leader المتاح)")
+        ids.add("AUTO")
+        models.forEach { m ->
+            options.add("👤 تعيين (${m.name}) كمدير")
+            ids.add(m.id)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("👑 اختيار مدير المجلس")
+            .setItems(options.toTypedArray()) { _, which ->
+                manualLeaderId = ids[which]
+                saveModels()
+                updateLeaderButtonLabel()
+            }
+            .show()
+    }
+
+    private fun updateLeaderButtonLabel() {
+        if (!::btnModeSelector.isInitialized) return
+        btnModeSelector.text = if (manualLeaderId == "AUTO") {
+            "👑 مدير المجلس المعين: تلقائي ذكي"
+        } else {
+            val l = models.find { it.id == manualLeaderId }
+            "👑 مدير المجلس المعين: (${l?.name ?: "تلقائي"})"
+        }
+    }
+
+    // ==================== تصدير ZIP وتقسيم الملفات (Downloads) ====================
+
+    private fun createZip(autoExport: Boolean) {
+        val conv = getCurrentConversation() ?: return
+        val source = conv.finalCode.ifBlank { resultTextView.text.toString() }.trim()
+        if (source.isBlank()) {
+            toast("لا يوجد محتوى لإنشاء ZIP.")
+            return
+        }
         scope.launch {
-            setBusy(true, "إنشاء Project.zip…")
+            setBusy(true, "📦 جاري إنشاء ملف Project.zip...")
             try {
                 val file = withContext(Dispatchers.IO) {
                     val dir = getExternalFilesDir(null) ?: filesDir
-                    val zip = java.io.File(dir, "Project.zip")
+                    val zip = File(dir, "BasselAI_${conv.conversationId}.zip")
                     ZipOutputStream(zip.outputStream().buffered()).use { zos ->
-                        val files = splitGeneratedFiles(source)
-                        files.forEach { (name, content) ->
-                            val safeName = name.replace("\\", "/").split("/")
-                                .filter { it.isNotBlank() && it != "." && it != ".." }.joinToString("/")
-                                .ifBlank { "output.txt" }
-                            zos.putNextEntry(ZipEntry(safeName))
+                        val parts = splitGeneratedFiles(source)
+                        parts.forEach { (name, content) ->
+                            zos.putNextEntry(ZipEntry(name))
                             zos.write(content.toByteArray(StandardCharsets.UTF_8))
                             zos.closeEntry()
                         }
-                        val report = buildString {
-                            append(audit.joinToString("\n"))
-                            append("\n\nالحالة: ").append(lastTaskStatus)
-                            append("\nالاختبارات البرمجية الفعلية: لم تُشغّل داخل هذا التطبيق.")
-                            append("\nدرجة المراجعة النصية لا تثبت صحة الكود.")
-                        }
                         zos.putNextEntry(ZipEntry("AUDIT_REPORT.txt"))
-                        zos.write(report.toByteArray(StandardCharsets.UTF_8))
-                        zos.closeEntry()
-                        zos.putNextEntry(ZipEntry("TASK_MEMORY.json"))
-                        zos.write(buildTaskMemoryJson().toString(2).toByteArray(StandardCharsets.UTF_8))
+                        zos.write(conv.auditReport.toByteArray(StandardCharsets.UTF_8))
                         zos.closeEntry()
                     }
                     zip
                 }
                 latestZip = file
-                prefs.edit().putString("latest_zip_path_v1", file.absolutePath).apply()
-                audit.add("تم إنشاء ZIP: ${file.absolutePath} (${file.length()} bytes)")
-                refreshAudit()
-                setStatus("تم إنشاء Project.zip (${file.length()} bytes).")
-                toast("تم إنشاء ZIP داخل مساحة التطبيق.")
+                setStatus("تم إنشاء Project.zip بنجاح.", "#4ADE80")
+                if (autoExport) exportZip() else toast("تم حفظ ZIP محلياً.")
             } catch (e: Exception) {
-                setStatus("فشل إنشاء ZIP: ${safeError(e)}")
-            } finally { setBusy(false) }
+                setStatus("فشل ZIP: ${safeError(e)}", "#F87171")
+            } finally {
+                setBusy(false)
+            }
         }
     }
 
-    /**
-     * Accepts explicit ```filename.ext fenced blocks. If none are found, stores the whole
-     * response as README_or_output.md. This is intentionally conservative: it does not
-     * pretend to infer a reliable project tree from arbitrary prose.
-     */
     private fun splitGeneratedFiles(text: String): List<Pair<String, String>> {
         val regex = Regex("(?s)```([^\\n`]*)\\n(.*?)```")
         val matches = regex.findAll(text).toList()
-        if (matches.isEmpty()) return listOf("README_or_output.md" to text)
-        val result = mutableListOf<Pair<String, String>>()
-        matches.forEachIndexed { index, match ->
-            val header = match.groupValues[1].trim()
-            val path = Regex("[A-Za-z0-9_./-]+\\.[A-Za-z0-9]+").find(header)?.value
-                ?: "generated_file_${index + 1}.txt"
-            result.add(path to match.groupValues[2].trimEnd())
+        if (matches.isEmpty()) return listOf("output.txt" to text)
+        val list = mutableListOf<Pair<String, String>>()
+        matches.forEachIndexed { i, m ->
+            val h = m.groupValues[1].trim()
+            val filename = Regex("[A-Za-z0-9_./-]+\\.[A-Za-z0-9]+").find(h)?.value ?: "file_${i + 1}.txt"
+            list.add(filename to m.groupValues[2].trimEnd())
         }
-        return result
+        return list
     }
 
     private fun exportZip() {
         val zip = latestZip
-        if (zip == null || !zip.exists() || zip.length() <= 0L) {
-            toast("أنشئ ZIP أولًا؛ لم يُعثر على ملف صالح للتصدير.")
+        if (zip == null || !zip.exists()) {
+            toast("أنشئ ملف ZIP أولاً.")
             return
         }
         scope.launch {
-            setBusy(true, "حفظ ZIP في Downloads…")
-            var insertedUri: Uri? = null
+            setBusy(true, "📥 حفظ ZIP في مجلد Downloads...")
             try {
-                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                if (Build.VERSION.SDK_INT >= 29) {
                     withContext(Dispatchers.IO) {
-                        val values = android.content.ContentValues().apply {
-                            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "BasselAI_Project.zip")
-                            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/zip")
-                            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
-                            put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+                        val name = "BasselAI_${System.currentTimeMillis()}.zip"
+                        val values = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                            put(MediaStore.MediaColumns.MIME_TYPE, "application/zip")
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                         }
-                        val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                            ?: throw IllegalStateException("تعذر إنشاء ملف في Downloads.")
-                        insertedUri = uri
-                        try {
-                            contentResolver.openOutputStream(uri, "w")?.use { out -> zip.inputStream().use { it.copyTo(out) } }
-                                ?: throw IllegalStateException("تعذر فتح ملف Downloads للكتابة.")
-                            val ready = android.content.ContentValues().apply {
-                                put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
-                            }
-                            contentResolver.update(uri, ready, null, null)
-                        } catch (e: Exception) {
-                            contentResolver.delete(uri, null, null)
-                            throw e
-                        }
+                        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                            ?: throw IllegalStateException("تعذر الإنشاء في Downloads.")
+                        contentResolver.openOutputStream(uri, "w")?.use { out ->
+                            zip.inputStream().use { it.copyTo(out) }
+                        } ?: throw IllegalStateException("تعذر الكتابة.")
                     }
-                    appendAudit("تم تصدير ZIP إلى مجلد Downloads عبر MediaStore.")
-                    setStatus("تم حفظ BasselAI_Project.zip في Downloads.")
-                    toast("تم حفظ ZIP في Downloads.")
+                    setStatus("✅ تم الحفظ في Downloads بنجاح.", "#4ADE80")
+                    toast("تم الحفظ في التنزيلات!")
                 } else {
                     val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
@@ -788,186 +1275,165 @@ class MainActivity : Activity() {
                         putExtra(Intent.EXTRA_TITLE, "BasselAI_Project.zip")
                     }
                     startActivityForResult(intent, REQUEST_EXPORT)
-                    setStatus("اختر مجلد Downloads في نافذة الحفظ.")
                 }
             } catch (e: Exception) {
-                insertedUri?.let { try { contentResolver.delete(it, null, null) } catch (_: Exception) {} }
-                appendAudit("فشل تصدير ZIP: ${safeError(e)}")
-                setStatus("فشل تصدير ZIP: ${safeError(e)}")
-                toast("فشل التصدير: ${safeError(e)}")
-            } finally { setBusy(false) }
+                setStatus("فشل التصدير: ${safeError(e)}", "#F87171")
+            } finally {
+                setBusy(false)
+            }
         }
     }
 
-    @Deprecated("Uses the compatible Activity result callback for broad Android support")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_EXPORT || resultCode != RESULT_OK) return
-        val uri: Uri = data?.data ?: return
-        val zip = latestZip ?: return
-        scope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    contentResolver.openOutputStream(uri)?.use { out -> zip.inputStream().use { it.copyTo(out) } }
-                        ?: throw IllegalStateException("تعذر فتح وجهة التصدير.")
+        if (requestCode == REQUEST_EXPORT && resultCode == RESULT_OK) {
+            val uri = data?.data ?: return
+            val zip = latestZip ?: return
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        contentResolver.openOutputStream(uri)?.use { out -> zip.inputStream().use { it.copyTo(out) } }
+                    }
+                    toast("تم التصدير بنجاح.")
+                } catch (e: Exception) {
+                    toast("فشل الحفظ: ${safeError(e)}")
                 }
-                toast("تم تصدير Project.zip.")
-            } catch (e: Exception) { toast("فشل التصدير: ${safeError(e)}") }
+            }
         }
     }
 
-    private fun refreshAudit() {
-        if (::auditText.isInitialized) auditText.text = audit.takeLast(160).joinToString("\n")
-        if (::agentStatusText.isInitialized) refreshAgentTimeline()
-        persistSession()
-    }
+    // ==================== السجلات والأرشيف الخارجي ====================
 
-    private fun refreshAgentTimeline() {
-        if (!::agentStatusText.isInitialized) return
-        val lines = models.map { model ->
-            "• ${model.name} — ${modelStates[model.id] ?: "لم يبدأ دوره"}"
+    private fun showLogsAndStatesDialog() {
+        val conv = getCurrentConversation()
+        val summary = buildString {
+            append("=== 📌 المحادثة النشطة ===\n")
+            append("العنوان: ${conv?.title}\n")
+            append("الحالة: ${conv?.state}\n\n")
+            append("=== 🤖 حالة النماذج ===\n")
+            models.forEach { append("• ${it.name} (${it.role}) -> [${it.status}]\n") }
         }
-        agentStatusText.text = (listOf("حالة المهمة: $lastTaskStatus") + lines).joinToString("\n")
+        showSelectableTextDialog("📊 السجل وحالة النظام", summary)
     }
 
-    private fun appendAudit(message: String) {
-        audit.add("[${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())}] $message")
-        refreshAudit()
+    private fun showAuditAndMemoryHubDialog() {
+        val conv = getCurrentConversation() ?: return
+        val options = arrayOf(
+            "📜 تقرير التدقيق والشفافية",
+            "📋 نسخ الكود النهائي",
+            "📋 نسخ ذاكرة المحادثة (JSON)"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("📋 التقرير والذاكرة")
+            .setItems(options) { _, which ->
+                when(which) {
+                    0 -> showSelectableTextDialog("تقرير الشفافية", conv.auditReport)
+                    1 -> copyText("الكود النهائي", conv.finalCode)
+                    2 -> copyText("JSON", buildConvJson(conv).toString(2))
+                }
+            }
+            .setPositiveButton("إغلاق", null)
+            .show()
     }
 
-    private fun buildStatusSummary(): String = buildString {
-        append("حالة المهمة: ").append(lastTaskStatus).append("\n")
-        models.forEach { append(it.name).append(" — ").append(modelStates[it.id] ?: "لم يبدأ دوره").append("\n") }
+    private fun showQuickCopyMenuDialog() {
+        val conv = getCurrentConversation()
+        val options = arrayOf(
+            "📋 نسخ النص المعروض حالياً",
+            "📋 نسخ الحل البرمجي النهائي",
+            "📋 نسخ تقرير الشفافية"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("📋 خيارات النسخ")
+            .setItems(options) { _, which ->
+                when(which) {
+                    0 -> copyText("الشاشة", resultTextView.text.toString())
+                    1 -> copyText("الكود", conv?.finalCode ?: resultTextView.text.toString())
+                    2 -> copyText("التقرير", conv?.auditReport ?: "لا يوجد")
+                }
+            }
+            .show()
     }
 
-    private fun buildFullAuditReport(): String = buildString {
-        append(buildStatusSummary()).append("\n")
-        append("نتيجة المراجعة النصية: ").append(lastReviewScore?.let { "$it/100" } ?: "غير متاحة").append("\n")
-        append("الاختبارات الفعلية: لم تُشغّل داخل التطبيق.\n\n")
-        append(audit.joinToString("\n"))
+    private fun buildConvJson(conv: ConversationRecord): JSONObject {
+        return JSONObject()
+            .put("conversationId", conv.conversationId)
+            .put("title", conv.title)
+            .put("state", conv.state.name)
+            .put("finalCode", conv.finalCode)
+            .put("auditReport", conv.auditReport)
+            .put("reviewScore", conv.reviewScore ?: JSONObject.NULL)
     }
 
-    private fun buildTaskMemoryJson(): JSONObject = JSONObject()
-        .put("schema_version", 1)
-        .put("task_prompt", lastTaskPrompt)
-        .put("task_status", lastTaskStatus)
-        .put("created_or_updated_at", java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US).format(java.util.Date()))
-        .put("final_output", outputTextOrLatest())
-        .put("review_score_out_of_100", lastReviewScore ?: JSONObject.NULL)
-        .put("review_score_meaning", "متوسط درجات المراجعة النصية، وليس نسبة صحة أو إجماع")
-        .put("tests_executed", false)
-        .put("audit_log", JSONArray().apply { audit.forEach { put(it) } })
-        .put("proposals", JSONArray().apply {
-            proposalArchive.forEach { (name, content) -> put(JSONObject().put("model", name).put("content_excerpt", content)) }
-        })
-        .put("reviews", JSONArray().apply {
-            reviewArchive.forEach { (name, content) -> put(JSONObject().put("model", name).put("review_excerpt", content)) }
-        })
-        .put("model_states", JSONObject().apply { models.forEach { put(it.name, modelStates[it.id] ?: "لم يبدأ دوره") } })
-
-    private fun outputTextOrLatest(): String = if (::outputText.isInitialized) outputText.text.toString() else latestOutput
-
-    private fun persistSession() {
-        try {
-            val editor = prefs.edit()
-                .putString("audit_history_v1", audit.takeLast(300).joinToString("\n"))
-                .putString("last_task_prompt_v1", lastTaskPrompt)
-                .putString("last_task_status_v1", lastTaskStatus)
-                .putString("last_output_v1", outputTextOrLatest())
-                .putString("last_memory_json_v1", buildTaskMemoryJson().toString())
-            editor.apply()
-        } catch (_: Exception) { /* Keep UI responsive; next explicit export may still work. */ }
-    }
-
-    private fun restoreSession() {
-        lastTaskPrompt = prefs.getString("last_task_prompt_v1", "").orEmpty()
-        lastTaskStatus = prefs.getString("last_task_status_v1", "لم يبدأ التنفيذ").orEmpty()
-        latestOutput = prefs.getString("last_output_v1", "").orEmpty()
-        val savedZipPath = prefs.getString("latest_zip_path_v1", "").orEmpty()
-        if (savedZipPath.isNotBlank()) {
-            val savedZip = java.io.File(savedZipPath)
-            if (savedZip.exists() && savedZip.length() > 0L) latestZip = savedZip
+    private fun showSelectableTextDialog(title: String, content: String) {
+        val tv = TextView(this).apply {
+            text = content
+            textSize = 12.5f
+            setTextColor(Color.parseColor("#E2E8F0"))
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+            setTextIsSelectable(true)
         }
-        if (lastTaskPrompt.isNotBlank()) promptInput.setText(lastTaskPrompt)
-        if (latestOutput.isNotBlank()) outputText.setText(latestOutput)
-        val savedAudit = prefs.getString("audit_history_v1", "").orEmpty()
-        if (savedAudit.isNotBlank()) audit.addAll(savedAudit.split("\n").takeLast(300))
-        val memory = prefs.getString("last_memory_json_v1", null)
-        if (memory != null) {
-            try {
-                val saved = JSONObject(memory)
-                lastReviewScore = saved.takeIf { !it.isNull("review_score_out_of_100") }?.optInt("review_score_out_of_100")
-                val savedStates = saved.optJSONObject("model_states")
-                if (savedStates != null) models.forEach { model ->
-                    if (savedStates.has(model.name)) modelStates[model.id] = savedStates.optString(model.name)
-                }
-                val savedProposals = saved.optJSONArray("proposals")
-                if (savedProposals != null) for (i in 0 until savedProposals.length()) {
-                    val item = savedProposals.optJSONObject(i) ?: continue
-                    proposalArchive.add(item.optString("model") to item.optString("content_excerpt"))
-                }
-                val savedReviews = saved.optJSONArray("reviews")
-                if (savedReviews != null) for (i in 0 until savedReviews.length()) {
-                    val item = savedReviews.optJSONObject(i) ?: continue
-                    reviewArchive.add(item.optString("model") to item.optString("review_excerpt"))
-                }
-            } catch (_: Exception) { lastReviewScore = null }
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.parseColor("#0F172A"))
+            addView(tv)
         }
-        refreshAudit()
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(scroll)
+            .setPositiveButton("📋 نسخ الكل") { _, _ -> copyText(title, content) }
+            .setNegativeButton("إغلاق", null)
+            .show()
     }
 
-    private fun copyText(label: String, value: String) {
-        if (value.isBlank()) { toast("لا يوجد محتوى لنسخه: $label"); return }
-        val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText(label, value))
-        toast("تم نسخ $label.")
-    }
-
-    private fun setBusy(busy: Boolean, message: String = "") {
-        progressBar.visibility = if (busy) View.VISIBLE else View.GONE
-        if (message.isNotBlank()) setStatus(message)
-    }
-
-    private fun safeError(e: Throwable): String =
-        (e.message ?: e.javaClass.simpleName).replace(Regex("(?i)(api[_ -]?key|authorization)\\s*[:=]\\s*\\S+"), "\$1=[redacted]").take(220)
-
-    private fun modelName(id: String) = models.firstOrNull { it.id == id }?.name ?: id.take(8)
+    // ==================== تشفير Keystore وحفظ البيانات ====================
 
     private fun saveModels() {
         val array = JSONArray()
         models.forEach { m ->
-            array.put(JSONObject().put("id", m.id).put("name", m.name).put("provider", m.provider)
-                .put("endpoint", m.endpoint).put("modelId", m.modelId).put("encryptedKey", m.encryptedKey)
-                .put("role", m.role))
+            array.put(JSONObject()
+                .put("id", m.id)
+                .put("name", m.name)
+                .put("provider", m.provider)
+                .put("endpoint", m.endpoint)
+                .put("modelId", m.modelId)
+                .put("encryptedKey", m.encryptedKey)
+                .put("role", m.role)
+                .put("status", m.status.name)
+            )
         }
-        prefs.edit().putString("models", array.toString()).apply()
+        prefs.edit().putString("models_master_v3", array.toString()).putString("manual_leader_id", manualLeaderId).apply()
     }
 
     private fun loadModels() {
-        var registryReadFailed = false
+        models.clear()
+        manualLeaderId = prefs.getString("manual_leader_id", "AUTO") ?: "AUTO"
         try {
-            val array = JSONArray(prefs.getString("models", "[]"))
+            val raw = prefs.getString("models_master_v3", null) ?: prefs.getString("models_v2", "[]")
+            val array = JSONArray(raw)
             for (i in 0 until array.length()) {
                 val o = array.getJSONObject(i)
-                models.add(AiModel(o.getString("id"), o.getString("name"), o.getString("provider"),
-                    o.getString("endpoint"), o.getString("modelId"), o.optString("encryptedKey"),
-                    o.optString("role", "Coder")))
+                models.add(
+                    AiModel(
+                        id = o.getString("id"),
+                        name = o.getString("name"),
+                        provider = o.getString("provider"),
+                        endpoint = o.getString("endpoint"),
+                        modelId = o.getString("modelId"),
+                        encryptedKey = o.optString("encryptedKey"),
+                        role = o.optString("role", "Coder"),
+                        status = try { ModelStatus.valueOf(o.optString("status", "AVAILABLE")) } catch (_: Exception) { ModelStatus.AVAILABLE }
+                    )
+                )
             }
-        } catch (_: Exception) {
-            // Do not silently replace a registry that may contain encrypted API keys.
-            registryReadFailed = true
-        }
-        // Seed defaults only on a genuinely empty, readable registry. Never replace existing encrypted keys.
-        if (models.isEmpty() && !registryReadFailed) {
-            val defaults = listOf(
-                AiModel("default_groq_120b", "Groq Llama 3.3", "Groq", "https://api.groq.com/openai/v1/chat/completions", "openai/gpt-oss-120b", "", "Planner/Leader"),
-                AiModel("default_groq_20b", "Groq Agent 2", "Groq", "https://api.groq.com/openai/v1/chat/completions", "openai/gpt-oss-20b", "", "Reviewer"),
-                AiModel("default_openrouter_free", "OpenRouter Coder", "OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "openrouter/free", "", "Coder"),
-                AiModel("default_poolside", "Poolside Laguna", "OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "poolside/laguna-s-2.1:free", "", "Coder"),
-                AiModel("default_nvidia", "NVIDIA Nemotron", "OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "nvidia/nemotron-3-ultra-550b-a55b:free", "", "Reviewer"),
-                AiModel("default_gemini", "Gemini 3.8 Flash", "Gemini", "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent", "gemini-3.8-flash", "", "Prompt Engineer")
-            )
-            models.addAll(defaults)
+        } catch (_: Exception) {}
+
+        if (models.isEmpty()) {
+            models.addAll(listOf(
+                AiModel("g1", "Groq Llama 3.3", "Groq", DEFAULT_GROQ_ENDPOINT, "openai/gpt-oss-120b", "", "Planner/Leader"),
+                AiModel("g2", "Groq Agent 2", "Groq", DEFAULT_GROQ_ENDPOINT, "openai/gpt-oss-20b", "", "Reviewer"),
+                AiModel("or1", "OpenRouter Coder", "OpenRouter", DEFAULT_OPENROUTER_ENDPOINT, "openrouter/free", "", "Coder"),
+                AiModel("gem1", "Gemini 3.8 Flash", "Gemini", DEFAULT_GEMINI_ENDPOINT, "gemini-3.8-flash", "", "Prompt Engineer")
+            ))
             saveModels()
         }
     }
@@ -979,17 +1445,14 @@ class MainActivity : Activity() {
             cipher.init(Cipher.ENCRYPT_MODE, getOrCreateSecretKey())
             val encrypted = cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))
             val iv = cipher.iv
-            android.util.Base64.encodeToString(iv + encrypted, android.util.Base64.NO_WRAP)
-        } catch (e: Exception) {
-            toast("تعذر تشفير المفتاح: ${safeError(e)}")
-            ""
-        }
+            Base64.encodeToString(iv + encrypted, Base64.NO_WRAP)
+        } catch (_: Exception) { "" }
     }
 
     private fun decryptKey(value: String): String {
         if (value.isBlank()) return ""
         return try {
-            val all = android.util.Base64.decode(value, android.util.Base64.NO_WRAP)
+            val all = Base64.decode(value, Base64.NO_WRAP)
             val iv = all.copyOfRange(0, 12)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateSecretKey(), GCMParameterSpec(128, iv))
@@ -998,28 +1461,84 @@ class MainActivity : Activity() {
     }
 
     private fun getOrCreateSecretKey(): SecretKey {
-        val alias = "BasselAI.ApiKey.AES"
-        val ks = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val alias = "BasselAI.MasterKey.AES"
+        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getKey(alias, null) as? SecretKey)?.let { return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        generator.init(KeyGenParameterSpec.Builder(alias,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setRandomizedEncryptionRequired(true)
-            .build())
+        generator.init(
+            KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setRandomizedEncryptionRequired(true)
+                .build()
+        )
         return generator.generateKey()
     }
 
-    data class AiModel(
-        val id: String,
-        val name: String,
-        val provider: String,
-        val endpoint: String,
-        val modelId: String,
-        val encryptedKey: String,
-        val role: String
-    )
+    // ==================== دوال مساعدة عامة والأمان ====================
 
-    companion object { private const val REQUEST_EXPORT = 7204 }
+    private fun safeError(e: Throwable): String =
+        (e.message ?: e.javaClass.simpleName)
+            .replace(Regex("(?i)(api[_ -]?key|authorization|bearer)\\s*[:=]?\\s*\\S+"), "$1=[redacted]")
+            .take(220)
+
+    private fun copyText(label: String, value: String) {
+        if (value.isBlank()) {
+            toast("لا يوجد محتوى لنسخه: $label")
+            return
+        }
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, value))
+        toast("تم نسخ $label إلى الحافظة.")
+    }
+
+    private fun setBusy(busy: Boolean, msg: String = "", color: String = "#38BDF8") {
+        progressBar.visibility = if (busy) View.VISIBLE else View.GONE
+        if (msg.isNotBlank()) setStatus(msg, color)
+    }
+
+    private fun setStatus(txt: String, colorHex: String = "#4ADE80") {
+        if (::statusTextView.isInitialized) {
+            statusTextView.text = if (txt.startsWith("الحالة:")) txt else "الحالة: $txt"
+            statusTextView.setTextColor(Color.parseColor(colorHex))
+        }
+    }
+
+    private fun createTopButton(l: String, act: () -> Unit) = Button(this).apply {
+        text = l; textSize = 11.5f; setTextColor(Color.WHITE); isAllCaps = false
+        background = createRoundedDrawable("#162032", 8f)
+        layoutParams = LinearLayout.LayoutParams(0, dp(42), 1f).apply { setMargins(dp(3), 0, dp(3), 0) }
+        setOnClickListener { act() }
+    }
+
+    private fun createBottomButton(l: String, bg: String, act: () -> Unit) = Button(this).apply {
+        text = l; textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE); isAllCaps = false
+        background = createRoundedDrawable(bg, 8f)
+        layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { setMargins(dp(3), 0, dp(3), 0) }
+        setOnClickListener { act() }
+    }
+
+    private fun createDialogLabel(t: String) = TextView(this).apply {
+        text = t; setTextColor(Color.parseColor("#93C5FD")); textSize = 12.5f; setPadding(0, dp(4), 0, dp(4))
+    }
+
+    private fun createDialogInput(h: String, v: String) = EditText(this).apply {
+        hint = h; setText(v); setHintTextColor(Color.parseColor("#64748B")); setTextColor(Color.WHITE)
+        textSize = 13f; setPadding(dp(12), dp(10), dp(12), dp(10))
+        background = createRoundedDrawable("#1E293B", 8f)
+        setTextIsSelectable(true)
+    }
+
+    private fun createRoundedDrawable(hex: String, r: Float) = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = r * resources.displayMetrics.density
+        setColor(Color.parseColor(hex))
+    }
+
+    private fun createSpacer(hDp: Int) = View(this).apply {
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(hDp))
+    }
+
+    private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
+    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 }
